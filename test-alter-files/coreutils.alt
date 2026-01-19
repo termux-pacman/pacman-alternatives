@@ -1,0 +1,6 @@
+alter_group_pager() {
+	associations=(usr/bin/pager:usr/libexec/coreutils/cat
+		usr/share/man/man1/pager.1.gz:usr/share/man/man1/cat.1.gz
+	)
+	priority=1
+}

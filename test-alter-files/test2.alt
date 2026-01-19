@@ -1,0 +1,7 @@
+# example switcher
+sysdir+="usr/"
+
+alter_group_test2() {
+	associations=(bin/123:bin/test)
+	priority=100
+}

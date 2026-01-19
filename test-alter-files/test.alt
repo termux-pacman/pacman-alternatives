@@ -1,0 +1,14 @@
+# example switcher
+alter_group_test-switcher() {
+	associations=(usr/bin/test-switcher:usr/bin/test
+		usr/share/man/man1/test-switcher.1.gz:usr/share/man/man1/test.1.gz
+	)
+	priority=100
+}
+
+alter_group_test-switcher2() {
+	associations=(usr/bin/test-switcher2:usr/bin/test
+		usr/share/man/man1/test-switcher2.1.gz:usr/share/man/man1/test.1.gz
+	)
+	priority=100
+}

@@ -1,0 +1,4 @@
+alter_group_editor() {
+	associations=(usr/bin/editor:usr/bin/nano usr/bin/editor2:usr/bin/nano usr/share/man/man1/editor.1.gz:usr/share/man/man1/nano.1.gz)
+	priority=50
+}

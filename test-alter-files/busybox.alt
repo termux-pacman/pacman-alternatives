@@ -1,0 +1,22 @@
+alter_group_vi() {
+	associations=(usr/bin/vi:usr/libexec/busybox/vi)
+	priority=10
+}
+
+alter_group_editor() {
+	associations=(usr/bin/editor:usr/libexec/busybox/vi)
+	priority=10
+}
+
+alter_group_pager() {
+	associations=(usr/bin/pager:usr/libexec/busybox/less)
+	priority=10
+}
+
+alter_group_nc() {
+	associations=(usr/bin/nc:usr/libexec/busybox/nc
+		usr/bin/ncat:usr/libexec/busybox/nc
+		usr/bin/netcat:usr/libexec/busybox/nc
+	)
+	priority=10
+}

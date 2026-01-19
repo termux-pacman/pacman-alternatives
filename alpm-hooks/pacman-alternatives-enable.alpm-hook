@@ -1,0 +1,10 @@
+[Trigger]
+Type = Path
+Operation = Install
+Target = @ALTER_FILES_FULLPATH@/*.alt
+
+[Action]
+Description = Automatic enabling alternatives...
+When = PostTransaction
+Exec = @ALPM_SCRIPT_DIR@/run-pacman-alternatives enable
+NeedsTargets

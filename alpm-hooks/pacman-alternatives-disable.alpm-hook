@@ -1,0 +1,10 @@
+[Trigger]
+Type = Path
+Operation = Remove
+Target = @ALTER_FILES_FULLPATH@/*.alt
+
+[Action]
+Description = Automatic disabling alternatives...
+When = PreTransaction
+Exec = @ALPM_SCRIPT_DIR@/run-pacman-alternatives disable
+NeedsTargets

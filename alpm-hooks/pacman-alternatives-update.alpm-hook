@@ -1,0 +1,10 @@
+[Trigger]
+Type = Path
+Operation = Upgrade
+Target = @ALTER_FILES_FULLPATH@/*.alt
+
+[Action]
+Description = Automatic updating alternatives...
+When = PostTransaction
+Exec = @ALPM_SCRIPT_DIR@/run-pacman-alternatives update
+NeedsTargets

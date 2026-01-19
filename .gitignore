@@ -1,0 +1,3 @@
+pacman-alternatives
+alpm-hooks/*.hook
+alpm-hooks/run-pacman-alternatives
