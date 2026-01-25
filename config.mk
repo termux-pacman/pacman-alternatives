@@ -1,4 +1,8 @@
 SHELL = /bin/bash
+FULL_DESTDIR =
+ifneq ($(strip $(DESTDIR)),)
+	FULL_DESTDIR = $(shell realpath $(DESTDIR))
+endif
 
 ifneq (,$(wildcard /system/bin/app_process))
 	# for android (termux)

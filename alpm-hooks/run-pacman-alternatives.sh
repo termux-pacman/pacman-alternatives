@@ -13,7 +13,7 @@ while read -r i; do
 done
 
 if [[ -n "${alts}" && ("${1}" = "update" || "${1}" = "disable") ]]; then
-	alts=($(pacman-alternatives -Qa ${alts[@]}))
+	alts=($(pacman-alternatives -Qe ${alts[@]}))
 fi
 
 if [ -z "${alts}" ]; then

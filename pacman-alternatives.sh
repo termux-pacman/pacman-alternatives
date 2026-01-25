@@ -1,11 +1,15 @@
 #!@BASHPATH@
 
-set -e
+set -ef
 
 # pacman-alternatives system variable
-if [[ -z "${PA_RUN_IN_ALPM_HOOKS}" || ("${PA_RUN_IN_ALPM_HOOKS}" != "true" && "${PA_RUN_IN_ALPM_HOOKS}" != "false") ]]; then
-	PA_RUN_IN_ALPM_HOOKS=false
-fi
+_pa_def_sys_bool_var() {
+	if [[ -z "${!1}" || ("${!1}" != "true" && "${!1}" != "false") ]]; then
+		eval "${1}=false"
+	fi
+}
+_pa_def_sys_bool_var PA_RUN_IN_ALPM_HOOKS
+_pa_def_sys_bool_var PA_VERBOSE
 PA_DEF_SYSDIR="@SYSDIR@"
 PA_DEF_PREFIX="@PREFIX@"
 PA_DEF_ALTER_FILES_PATH="@ALTER_FILES_PATH@"
@@ -61,12 +65,13 @@ _pa_reject_disable=false
 _pa_reject_replace=false
 _pa_disable_reject=false
 _pa_disable_ghost=false
-_pa_guery_check=false
+_pa_query_check=false
 _pa_query_groups=false
 _pa_query_global_list=false
 _pa_query_list=false
 _pa_query_info=false
-_pa_query_alters=false
+_pa_query_enabled=false
+_pa_query_selected=false
 _pa_query_alter_files=false
 _pa_helpmode=false
 _pa_automode=false
@@ -79,7 +84,7 @@ _pa_message() {
 
 _pa_progress() {
 	local now="$1" goal="$2"
-	! ${_pa_noprogress} && _pa_message "${_pa_title_progress}(${now}/${goal}) ${3}${_pa_nostyle}$((! ${_pa_progress_noret} && ((now < goal))) && echo '\r' || echo '\n')" || true
+	! ${_pa_noprogress} && _pa_message "${_pa_title_progress}(${now}/${goal}) ${3}${_pa_nostyle}$((! ${_pa_progress_noret} && ! ${PA_VERBOSE} && ((now < goal))) && echo '\r' || echo '\n')" || true
 }
 
 _pa_header_standard() {
@@ -117,7 +122,25 @@ _pa_nothing_to_do() {
 	exit 0
 }
 
+_pa_verbose() {
+	if ${PA_VERBOSE}; then
+		local i _pa_nomessage=false
+		_pa_message "${BASH_LINENO[1]}: ${FUNCNAME[1]}:\n"
+		for i in $(tr ' ' '\n' <<< "${BASH_ARGV[@]:${BASH_ARGC[0]}:${BASH_ARGC[1]}}" | tac); do
+			_pa_message "\t${i}\n"
+		done
+	fi
+}
+
+_pa_verbose_var() {
+	while ${PA_VERBOSE} && (($# >= 1)); do
+		_pa_nomessage=false _pa_message "${1}='${!1}'\n"
+		shift 1
+	done
+}
+
 _pa_merge_data() {
+	_pa_verbose
 	local rows=${1}
 	shift 1
 
@@ -135,12 +158,15 @@ _pa_merge_data() {
 }
 
 _pa_check_dir_path() {
+	_pa_verbose
 	[[ "${1::1}${1:((${#1}-1))}" = "//" && -d "${1}" ]]
 	return $?
 }
 
 _pa_read_alter_file() {
+	_pa_verbose
 	local i=1 goal=$# error=() result=() sysdir linkdir rootdir name group associations alter_path alter
+	set +f
 	while (($# >= 1)); do
 		_pa_progress "${i}" "${goal}" "reading alternative files"
 		alter="${1}"
@@ -209,6 +235,7 @@ _pa_read_alter_file() {
 			)) || error+=("${group:=[unknown]}:${name}:syntax")
 		done
 	done
+	set -f
 	tr ' ' '\n' <<< "${result[@]}"
 	if ! ${_pa_noerror} && [ -n "${error}" ]; then
 		local alt
@@ -224,6 +251,7 @@ _pa_read_alter_file() {
 }
 
 _pa_read_enabled_alters() {
+	_pa_verbose
 	_pa_enabled_alt=($(for association in $(find "${_pa_enabled_alters_path}" -mindepth 1 -type f); do
 		association="${association//${_pa_enabled_alters_path}\//}"
 		awk -v association="${association//\//:}" -F "=" '{if ($1 == "association") print association ":" $2}' "${_pa_enabled_alters_path}/${association}"
@@ -231,25 +259,32 @@ _pa_read_enabled_alters() {
 }
 
 _pa_read_selected_alters() {
+	_pa_verbose
 	_pa_selected_alt=($(find "${_pa_enabled_alters_path}" -type l -exec readlink -fn {} \; -printf ':%f\n' | sed "s|${_pa_enabled_alters_path}/||g; s|:.*:select:|:|g; s|/|:|g"))
 }
 
 _pa_get_selected_alters() {
+	_pa_verbose
 	grep -E ${@} "^($(tr ' ' '|' <<< "${_pa_selected_alt[@]%:*}")):" || true
 }
 
 _pa_get_enabled_alter() {
+	_pa_verbose
 	local i=1 goal=$# notfound=() list=$(tr ' ' '\n' <<< "${_pa_enabled_alt[@]}") result=() type="enabled"
 	if ${_pa_select_selected_alt}; then
 		list=$(_pa_get_selected_alters <<< "${list}")
 		type="selected"
 	fi
-	while (($# >= 1)); do
-		_pa_progress "${i}" "${goal}" "getting ${type} alternatives"
-		result+=($(grep "^${1//\*/\.*}:" <<< "${list}")) || notfound+=("${1}")
-		i=$((i+1))
-		shift 1
-	done
+	if [ "${goal}" = "0" ]; then
+		result=(${list})
+	else
+		while (($# >= 1)); do
+			_pa_progress "${i}" "${goal}" "getting ${type} alternatives"
+			result+=($(grep "^${1//\*/\.*}:" <<< "${list}")) || notfound+=("${1}")
+			i=$((i+1))
+			shift 1
+		done
+	fi
 	tr ' ' '\n' <<< "${result[@]}" | sort -u
 	if ! ${_pa_noerror} && [ -n "${notfound}" ]; then
 		for i in ${notfound[@]}; do
@@ -260,24 +295,29 @@ _pa_get_enabled_alter() {
 }
 
 _pa_return_enabled_alter() {
+	_pa_verbose
 	tr ' ' '\n' <<< "${_pa_enabled_alt[@]}" | grep -Ev "^($(tr ' ' '|' <<< "${_pa_non_integrity_alt[@]}"))$"
 }
 
 _pa_chmod_alters() {
+	_pa_verbose
 	local paths=($(find "${_pa_enabled_alters_path}" -mindepth 1 -type f -o -type d))
 	[ -z "${paths}" ] || chmod ${1} ${paths[@]}
 }
 
 _pa_get_checksum_alter() {
+	_pa_verbose
 	sha256sum "${1}" | awk '{print "checksum=" $1}'
 }
 
 _pa_check_checksum_alter() {
-	awk -F '=' -v alt_file="${_pa_alter_files_path}/${1##*:}.alt" '{ if ($1 == "checksum") { print $2, alt_file } else {exit} }' "${_pa_enabled_alters_path}/${1//://}:"* | sha256sum -c --status 2>/dev/null
+	_pa_verbose
+	sha256sum -c --status 2>/dev/null <<< $(set +f; awk -F '=' -v alt_file="${_pa_alter_files_path}/${1##*:}.alt" '{ if ($1 == "checksum") { print $2, alt_file } else {exit} }' "${_pa_enabled_alters_path}/${1//://}:"*)
 	return $?
 }
 
 _pa_check_alter_data_integrity() {
+	_pa_verbose
 	local i=0 goal="$#"
 	while (($# >= 1)); do
 		_pa_progress "$((i+1))" "${goal}" "checking alternative data integrity"
@@ -295,10 +335,10 @@ _pa_check_alter_data_integrity() {
 		i=$((i+1))
 		shift 1
 	done
-	exit 1
 }
 
 _pa_check_existence_root_path() {
+	_pa_verbose
 	local i=0 goal=$((${#}/2+1)) list="${@}"
 	if [ "${operation:-}" = "enable" ]; then
 		list+=" $(_pa_return_enabled_alter | awk -F ':' '{printf $4 " "}')"
@@ -315,19 +355,20 @@ _pa_check_existence_root_path() {
 }
 
 _pa_check_existence_link_path() {
+	_pa_verbose
 	local i=0 goal="$#" list="$(tr ' ' '\n' <<< "${@} $(_pa_return_enabled_alter | _pa_get_selected_alters | awk -F ':' '{print $4}')")"
 	while (($# >= 1)); do
 		_pa_progress "$((i+1))" "${goal}" "checking link paths for existence"
-		if [ -f "${1}" ] && ! (($(grep -c "^${1}$" <<< "${list}") > 1)); then
+		if [[ -f "${1}" || -L "${1}" ]] && ! (($(grep -c "^${1}$" <<< "${list}") > 1)); then
 			echo $i
 		fi
 		i=$((i+1))
 		shift 1
 	done
-	exit 1
 }
 
 _pa_check_conflict_link_path() {
+	_pa_verbose
 	local i=0 goal=$((${#}/2+1))
 	local d_associations="$(_pa_merge_data 2 ${@} | sort -u)"
 	local e_associations="$(_pa_return_enabled_alter | awk -F ':' '!a[$1 ":" $4]++ {print $1 ":" $4}' | grep -Ev "^($(awk -F ':' '!a[$1]++ {print $1}' <<< "${d_associations}" | paste -sd '|')):")"
@@ -342,6 +383,7 @@ _pa_check_conflict_link_path() {
 }
 
 _pa_check_conflict_enabled_alter() {
+	_pa_verbose
 	local i=0 goal=$((${#}/2+1)) list="$(_pa_merge_data 2 ${@} | sort -u)" old=""
 	while (($# >= ${goal})); do
 		_pa_progress "$((i+1))" "$((goal-1))" "checking enabled alternatives for conflicts"
@@ -356,6 +398,7 @@ _pa_check_conflict_enabled_alter() {
 }
 
 _pa_check_valid_link_path() {
+	_pa_verbose
 	local i=0 goal="$#"
 	while (($# >= 1)); do
 		_pa_progress "$((i+1))" "${goal}" "checking link paths for validity"
@@ -368,6 +411,7 @@ _pa_check_valid_link_path() {
 }
 
 _pa_check_dependent_alter() {
+	_pa_verbose
 	local i=0 goal="$#" list="$(_pa_return_enabled_alter)"
 	if [ "${operation:-}" = "reject" ] && ! ${_pa_reject_disable}; then
 		list="$(_pa_get_selected_alters <<< "${list}")"
@@ -384,6 +428,7 @@ _pa_check_dependent_alter() {
 }
 
 _pa_check_duplicate_root_path() {
+	_pa_verbose
 	local args=($(_pa_merge_data 3 ${@}))
 	local i=0 goal=$((${#args[@]})) list="$(_pa_return_enabled_alter)"
 	while ((${i} < ${goal})); do
@@ -397,10 +442,13 @@ _pa_check_duplicate_root_path() {
 }
 
 _pa_check_alter_by_algorithm() {
+	_pa_verbose
+
 	local alg="${1}" message="${2}"
 	shift 2
 
 	local i=0 goal=$((${#}/2+1)) old_alt="" alt
+	set +f
 	while (($# >= ${goal})); do
 		_pa_progress "$((i+1))" "$((goal-1))" "${message}"
 		alt="${1}:${!goal}"
@@ -413,27 +461,33 @@ _pa_check_alter_by_algorithm() {
 		i=$((i+1))
 		shift 1
 	done
+	set -f
 }
 
 _pa_check_selected_alter() {
+	_pa_verbose
 	_pa_check_alter_by_algorithm '[[ " ${_pa_selected_alt[@]}" =~ " ${alt}:" ]]' \
 		'checking for selected alternatives' \
 		${@}
 }
 
 _pa_check_alter_belong_pkg() {
+	_pa_verbose
 	_pa_check_alter_by_algorithm 'grep -q "^${_pa_alter_files_path:1}/${!goal}.alt$" "${_pa_pacman_dbpath}/local/"*"/files"' \
 		'checking alternative files for belong to pkgs' \
 		${@}
 }
 
 _pa_check_enabled_alter() {
+	_pa_verbose
 	_pa_check_alter_by_algorithm '[[ " ${_pa_enabled_alt[@]}" =~ " ${alt}:" ]]' \
 		'checking for enabled alternatives' \
 		${@}
 }
 
 _pa_check_alt() {
+	_pa_verbose
+
 	_pa_check_alt_eval() {
 		if [ "${operation}" = "query" ]; then
 			local _pa_noprogress=true
@@ -550,12 +604,15 @@ _pa_check_alt() {
 }
 
 _pa_get_mode_by_selected_alt() {
+	_pa_verbose
 	local len="${#_pa_static_selected_alt[@]}"
 	[ "${len}" = "0" ] && return 1
 	awk -F ':' -v RS=" " -v gr="${1}" -v len="${len}" '{if ($1 == gr) {print $3; exit 0} else if (NR == len) {exit 1} }' <<< "${_pa_static_selected_alt[@]}"
 }
 
 _pa_action_association() {
+	_pa_verbose
+
 	local operation="$1"
 	shift 1
 	case "${operation}" in
@@ -660,6 +717,7 @@ _pa_action_association() {
 }
 
 _pa_choose_alt_by_priority() {
+	_pa_verbose
 	local group="${1}" alt1 alt2
 	local high="${2##*:}" low="${3#*:}"
 	if (("${high}" > "${low}")); then
@@ -684,6 +742,7 @@ _pa_choose_alt_by_priority() {
 }
 
 _pa_select_alt() {
+	_pa_verbose
 	local list="$(tr ' ' '\n' <<< "${@}" | sort -u)" alt alts alti alti_s mode=$(${_pa_automode} && echo "auto" || echo "manual") ghost_alt=()
 	for alt in $(awk -F ':' '!a[$1]++ {print $1}' <<< "${list}"); do
 		alts=($(grep "^${alt}:" <<< "${list}" | awk -F ':' '!a[$2 ":" $3]++ {print $2 ":" $3}'))
@@ -769,6 +828,7 @@ _pa_select_alt() {
 }
 
 _pa_alt_analog_by_group() {
+	_pa_verbose
 	local alts=(${@})
 	tr ' ' '\n' <<< "${_pa_enabled_alt[@]}" | \
 		grep -E "^($(tr ' ' '\n' <<< "${alts[@]%:*}" | sort -u | paste -sd '|')):" | \
@@ -776,6 +836,7 @@ _pa_alt_analog_by_group() {
 }
 
 _pa_question_to_continue() {
+	_pa_verbose
 	local yn
 	if ! ${_pa_noconfirm}; then
 		_pa_message "\n"
@@ -787,6 +848,7 @@ _pa_question_to_continue() {
 }
 
 _pa_notify_about_alt_and_get_confirm() {
+	_pa_verbose
 	${PA_RUN_IN_ALPM_HOOKS} && return
 
 	_pa_info "The following alternatives will be ${1}:"
@@ -814,7 +876,7 @@ _pa_notify_about_alt_and_get_confirm() {
 }
 
 _pa_enable() {
-	_pa_selfmode=true
+	_pa_verbose
 
 	local data_alt
 	_pa_commit "Reading alternative files"
@@ -894,13 +956,11 @@ _pa_enable() {
 }
 
 _pa_disable() {
+	_pa_verbose
+
 	_pa_commit "Getting enabled alternatives"
 	local data_alt
-	if [[ -z "${@}" ]]; then
-		data_alt="$(tr ' ' '\n' <<< ${_pa_enabled_alt[@]})"
-	else
-		data_alt=$(_pa_get_enabled_alter ${@})
-	fi
+	data_alt=$(_pa_get_enabled_alter ${@})
 
 	local alt alts=($(awk -F ':' '!a[$1 ":" $2]++ {print $1 ":" $2}' <<< "${data_alt}"))
 	if ${_pa_disable_ghost}; then
@@ -971,13 +1031,11 @@ _pa_disable() {
 }
 
 _pa_select() {
+	_pa_verbose
+
 	_pa_commit "Getting enabled alternatives"
 	local data_alt
-	if [[ -z "${@}" ]]; then
-		data_alt="$(tr ' ' '\n' <<< ${_pa_enabled_alt[@]})"
-	else
-		data_alt=$(_pa_get_enabled_alter ${@})
-	fi
+	data_alt=$(_pa_get_enabled_alter ${@})
 
 	_pa_commit "Checking alternatives status for $(${_pa_updatemode} && echo "updating" || echo "selecting")"
 	local alts=() alt_select=() alt
@@ -1022,6 +1080,8 @@ _pa_select() {
 }
 
 _pa_reject() {
+	_pa_verbose
+
 	if ! ${_pa_automode} && ${_pa_reject_disable}; then
 		_pa_selfmode=true
 	fi
@@ -1070,6 +1130,8 @@ _pa_reject() {
 }
 
 _pa_query() {
+	_pa_verbose
+
 	_pa_query_print_result() {
 		eval "if [ -n \"\${${1}}\" ]; then
 			echo \"  ${2}:\"
@@ -1080,14 +1142,11 @@ _pa_query() {
 	}
 
 	local data_alt
-	if [[ -z "${@}" ]]; then
-		data_alt="$(tr ' ' '\n' <<< ${_pa_enabled_alt[@]})"
-	else
-		data_alt=$(_pa_nomessage=true _pa_noerror=${_pa_query_alters} _pa_get_enabled_alter ${@})
-	fi
+	data_alt=$(_pa_nomessage=true _pa_select_selected_alt=${_pa_query_selected} \
+		_pa_noerror=$( (${_pa_query_enabled} || ${_pa_query_selected}) && echo "true" || echo "false") _pa_get_enabled_alter ${@})
 
 	if [ -z "${data_alt}" ]; then
-		if ${_pa_guery_check}; then
+		if ${_pa_query_check}; then
 			_pa_warning "there is nothing to check because there are no enabled alternatives"
 			_pa_nothing_to_do
 		fi
@@ -1095,7 +1154,7 @@ _pa_query() {
 	fi
 
 	local alts alt group name
-	if ${_pa_query_alters}; then
+	if ${_pa_query_enabled} || ${_pa_query_selected}; then
 		awk -F ':' '!a[$1 ":" $2]++ {print (($1 == "") ? "[unknown]" : $1) ":" (($2 == "") ? "[unknown]" : $2)}' <<< "${data_alt}"
 	elif ${_pa_query_alter_files}; then
 		find ${_pa_alter_files_path} -maxdepth 1 -mindepth 1 | grep -E "/($(awk -F ':' '!a[$2]++ {if ($2 != "") print $2}' <<< "${data_alt}" | paste -sd '|')).alt$"
@@ -1133,7 +1192,7 @@ _pa_query() {
 		END {
 			print ""
 		}' <<< "${data_alt}"
-	elif ${_pa_guery_check}; then
+	elif ${_pa_query_check}; then
 		_pa_commit "Checking alternative data integrity"
 		data_alt=(${data_alt})
 		for alt in $(_pa_nomessage=true _pa_check_alter_data_integrity ${_pa_enabled_alt[@]}); do
@@ -1208,6 +1267,8 @@ _pa_query() {
 }
 
 _pa_install() {
+	_pa_verbose
+
 	local file_alt=(${@})
 
 	_pa_commit "Checking alternatives status for installing"
@@ -1249,6 +1310,8 @@ _pa_install() {
 }
 
 _pa_uninstall() {
+	_pa_verbose
+
 	local file_alt=() alt altf
 	for alt in ${@#*:}; do
 		altf="${_pa_alter_files_path}/${alt}.alt"
@@ -1338,12 +1401,13 @@ options:
 _pa_help_query() {
 	_pa_message "usage:  pacman-alternatives {-Q --query} [options] [alternative(s)]
 options:
-  -a, --alternatives
   -c, --check
+  -e, --enabled
   -f, --alterfiles
   -g, --groups
   -i, --info
-  -l, --list (-ll)\n"
+  -l, --list (-ll)
+  -s, --selected\n"
 }
 
 _pa_help_install() {
@@ -1364,6 +1428,8 @@ _pa_version_info() {
 }
 
 _pa_run_operation() {
+	_pa_verbose
+
 	_pa_run_operation_add_alter() {
 		if ! [[ " ${alters[@]} " =~ " ${1} " ]]; then
 			alters+=("${1}")
@@ -1417,6 +1483,15 @@ _pa_run_operation() {
 		print_array("arg_alters", alts)
 	}' <<< "${@}")"
 
+	_pa_verbose_var operation _pa_conflicting_args \
+		_pa_{needed,noconfirm,noghost,overwrite} \
+		_pa_enable_select \
+		_pa_reject_{disable,replace} \
+		_pa_disable_{reject,ghost} \
+		_pa_query_{check,groups,global_list,list,info,enabled,selected,alter_files} \
+		_pa_{helpmode,automode,updatemode} \
+		_pa_{norequire_alt,only_group}
+
 	if [ -n "${_pa_args}" ]; then
 		_pa_error "invalid option '$(tr ' ' '\n' <<< "${_pa_args[@]}" | sort -u | paste -sd ' ')'"
 	fi
@@ -1469,6 +1544,7 @@ _pa_run_operation() {
 				continue
 			fi
 		else
+			set +f
 			if ! [[ "${alter}" =~ ":" ]]; then
 				alter=$(${_pa_only_group} && echo "${alter}:" || echo ":${alter}")
 			fi
@@ -1489,6 +1565,7 @@ _pa_run_operation() {
 				fi
 				continue
 			fi
+			set -f
 		fi
 		_pa_init_error "alternative not found: ${alter}"
 	done
@@ -1507,6 +1584,10 @@ _pa_run_operation() {
 	_pa_chmod_alters +w
 	_pa_${operation} "${alters[@]}"
 }
+
+if ${PA_VERBOSE}; then
+	shopt -s extdebug
+fi
 
 _pa_title_error="error:"
 _pa_title_warning="warning:"
@@ -1559,6 +1640,11 @@ if ${_pa_haserror}; then
 	exit 1
 fi
 
+_pa_verbose_var PA_{RUN_IN_ALPM_HOOKS,VERBOSE,SYSDIR,PREFIX,ALTER_FILES_PATH,ENABLED_ALTERS_PATH} \
+	PA_DEF_{SYSDIR,PREFIX,ALTER_FILES_PATH,ENABLED_ALTERS_PATH} \
+	_pa_{sysdir,prefix,alter_files_path,enabled_alters_path} \
+	_pa_{version,pacman_dbpath,style}
+
 _pa_args=($(awk -v RS=' ' '{
 	gsub(/\x1B\[[0-9;]*[A-Za-z]/, "", $1)
 	if (substr($1, 1, 1) == "-") {
@@ -1581,6 +1667,7 @@ fi
 
 case "${_pa_root_arg}" in
 	-E|--enable)
+	_pa_selfmode=true
 	_pa_run_operation enable \
 		-{s,-select}:1:enable_select \
 		-{a,-auto}:1:automode,enable_select \
@@ -1602,7 +1689,7 @@ case "${_pa_root_arg}" in
 	-S|--select)
 	_pa_conflicting_args="automode:auto updatemode:update"
 	_pa_run_operation select \
-		-{a,-auto}:1:automode,onlygroup \
+		-{a,-auto}:1:automode,only_group \
 		-{u,-update}:1:updatemode,norequire_alt \
 		-{h,-help}:1:helpmode \
 		--needed:1:needed \
@@ -1621,7 +1708,7 @@ case "${_pa_root_arg}" in
 	;;
 	-Q|--query)
 	_pa_norequire_alt=true
-	_pa_conflicting_args="guery_check:check query_groups:groups query_info:info query_list:list query_alters:alternatives query_alter_files:alterfiles"
+	_pa_conflicting_args="query_check:check query_groups:groups query_info:info query_list:list query_enabled:enabled query_selected:selected query_alter_files:alterfiles"
 	_pa_run_operation query \
 		-{h,-help}:1:helpmode \
 		-{c,-check}:1:guery_check \
@@ -1629,7 +1716,8 @@ case "${_pa_root_arg}" in
 		-{i,-info}:1:query_info \
 		-{l,-list}:2:query_list,query_global_list \
 		-{l,-list}:1:query_list \
-		-{a,-alternatives}:1:query_alters \
+		-{e,-enabled}:1:query_enabled \
+		-{s,-selected}:1:query_selected \
 		-{f,-alterfiles}:1:query_alter_files
 	;;
 	-I|--install)
