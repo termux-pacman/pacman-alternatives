@@ -13,10 +13,11 @@ run-pacman-alternatives: run-pacman-alternatives.sh
 	sed "s|@BASHPATH@|$(BASHPATH)|g" $^ > $@
 
 install-hooks: $(HOOKS)
-	install -Dm644 $^ $(ALPM_HOOK_DIR)
+	mkdir -p $(FULL_DESTDIR)$(ALPM_HOOK_DIR)/
+	install -Dm644 $^ $(FULL_DESTDIR)$(ALPM_HOOK_DIR)/
 
 install-script: run-pacman-alternatives
-	install -Dm755 run-pacman-alternatives $(ALPM_SCRIPT_DIR)
+	install -Dm755 $^ $(FULL_DESTDIR)$(ALPM_SCRIPT_DIR)/$^
 
 install: install-hooks install-script
 
