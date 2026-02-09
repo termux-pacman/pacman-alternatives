@@ -22,6 +22,6 @@ fi
 
 case "${1}" in
 	"enable") pacman-alternatives -Ea ${alts[@]} --overwrite;;
-	"update") pacman-alternatives -Su ${alts[@]};;
+	"update") pacman-alternatives -Su ${alts[@]} --overwrite;;
 	"disable") pacman-alternatives -Da ${alts[@]};;
 esac
