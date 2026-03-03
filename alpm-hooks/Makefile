@@ -6,11 +6,13 @@ HOOK_SOURCES = $(wildcard *.alpm-hook)
 HOOKS = $(HOOK_SOURCES:.alpm-hook=.hook)
 
 %.hook: %.alpm-hook
-	sed "s|@ALTER_FILES_FULLPATH@|$(ALTER_FILES_FULLPATH)|g; \
+	sed "s|@ALTER_FILES_FULLPATH@|$(ALTER_FILES_FULLPATH:/%=%)|g; \
 		s|@ALPM_SCRIPT_DIR@|$(ALPM_SCRIPT_DIR)|g" $^ > $@
 
 run-pacman-alternatives: run-pacman-alternatives.sh
 	sed "s|@BASHPATH@|$(BASHPATH)|g" $^ > $@
+
+build: $(HOOKS) run-pacman-alternatives
 
 install-hooks: $(HOOKS)
 	mkdir -p $(FULL_DESTDIR)$(ALPM_HOOK_DIR)/

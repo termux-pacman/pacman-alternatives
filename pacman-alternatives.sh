@@ -1597,7 +1597,13 @@ options:
 }
 
 _pa_version_info() {
-	_pa_message "pacman-alternatives ${_pa_version}\n"
+	_pa_message "pacman-alternatives ${_pa_version}
+
+A utility for managing symbolic links (alternatives) of pacman packages.
+License: GPLv3
+
+For bug reporting instructions, please see:
+<https://github.com/termux-pacman/pacman-alternatives/issues>\n"
 }
 
 _pa_run_operation() {

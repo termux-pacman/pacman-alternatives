@@ -10,6 +10,13 @@ $(OUTPUT):
 		s|@ALTER_FILES_PATH@|$(ALTER_FILES_PATH)|; \
 		s|@ENABLED_ALTERS_PATH@|$(ENABLED_ALTERS_PATH)|" $@
 
+build: $(OUTPUT)
+
+build-alpm-hooks:
+	$(MAKE) -C alpm-hooks DESTDIR="$(FULL_DESTDIR)" build
+
+build-all: build build-alpm-hooks
+
 install-alpm-hooks:
 	$(MAKE) -C alpm-hooks DESTDIR="$(FULL_DESTDIR)"
 
