@@ -1,4 +1,10 @@
 #!@BASHPATH@
+#
+# pacman-alternatives - utility for managing symbolic links (alternatives) of pacman packages
+#
+# Copyright (c) 2026 Termux-Pacman <pacman@termux.dev>
+# Copyright (c) 2026 Max Ivan (@Maxython) <mixython@gmail.com>
+# License: GPLv3
 
 set -ef
 
@@ -10,23 +16,31 @@ _pa_def_sys_bool_var() {
 }
 _pa_def_sys_bool_var PA_RUN_IN_ALPM_HOOKS
 _pa_def_sys_bool_var PA_VERBOSE
-PA_DEF_SYSDIR="@SYSDIR@"
-PA_DEF_PREFIX="@PREFIX@"
-PA_DEF_ALTER_FILES_PATH="@ALTER_FILES_PATH@"
-PA_DEF_ENABLED_ALTERS_PATH="@ENABLED_ALTERS_PATH@"
+readonly PA_DEF_SYSDIR="@SYSDIR@"
+readonly PA_DEF_ROOTDIR="@ROOTDIR@"
+readonly PA_DEF_LINKDIR="@LINKDIR@"
+readonly PA_DEF_PREFIX="@PREFIX@"
+readonly PA_DEF_ALTER_FILES_PATH="@ALTER_FILES_PATH@"
+readonly PA_DEF_ENABLED_ALTERS_PATH="@ENABLED_ALTERS_PATH@"
+readonly PA_DEF_READER_USER="@READER_USER@"
 _pa_sysdir="${PA_SYSDIR:="${PA_DEF_SYSDIR}"}"
+_pa_rootdir="${PA_ROOTDIR:="${PA_DEF_ROOTDIR}"}"
+_pa_linkdir="${PA_LINKDIR:="${PA_DEF_LINKDIR}"}"
 _pa_prefix="${PA_PREFIX:="${PA_DEF_PREFIX}"}"
 _pa_alter_files_path="${PA_ALTER_FILES_PATH:="${PA_DEF_ALTER_FILES_PATH}"}"
-_pa_enabled_alters_path="${PA_ENABLED_ALTERS_PATH="${PA_DEF_ENABLED_ALTERS_PATH}"}"
+_pa_enabled_alters_path="${PA_ENABLED_ALTERS_PATH:="${PA_DEF_ENABLED_ALTERS_PATH}"}"
+_pa_reader_user="${PA_READER_USER:="${PA_DEF_READER_USER}"}"
 if [ "${_pa_alter_files_path::1}" != "/" ]; then
 	_pa_alter_files_path="${_pa_prefix}/${_pa_alter_files_path}"
 fi
 if [ "${_pa_enabled_alters_path::1}" != "/" ]; then
 	_pa_enabled_alters_path="${_pa_prefix}/${_pa_enabled_alters_path}"
 fi
+_pa_uid=""
+_pa_uid_enabled_alters_path=""
 
 # pacman-alternatives system info
-_pa_version="1.0.0-BETA"
+readonly _pa_version="1.0.0"
 
 # database
 _pa_file_alt=()
@@ -85,10 +99,10 @@ _pa_message() {
 }
 
 _pa_progress() {
-	! ${_pa_noprogress} || return
+	! ${_pa_noprogress} || return 0
 	local now="$1" goal="$2"
 	if ${PA_RUN_IN_ALPM_HOOKS} && [ "${now}" != "1" ]; then
-		return
+		return 0
 	fi
 	local title="${_pa_title_progress}"
 	if ! ${PA_RUN_IN_ALPM_HOOKS}; then
@@ -120,6 +134,10 @@ _pa_error_message() {
 _pa_init_error() {
 	_pa_error_message "$1"
 	_pa_haserror=true
+}
+
+_pa_exit_error() {
+	${_pa_haserror} && exit 1 || true
 }
 
 _pa_error() {
@@ -172,13 +190,49 @@ _pa_merge_data() {
 }
 
 _pa_check_dir_path() {
-	_pa_verbose
 	[[ "${1::1}${1:((${#1}-1))}" = "//" && -d "${1}" ]]
 	return $?
 }
 
 _pa_read_alter_file() {
 	_pa_verbose
+
+	_pa_run_alter_funcs() {
+		${alter_funcs_runned:-false} && exit 1 || true
+		local -r alter_funcs_runned=true
+		for func in ${alt_funcs["${alter_path}"]}; do
+			(
+				${func}
+				: "${linkdir:="${sysdir}"}"
+				: "${rootdir:="${sysdir}"}"
+				group="${func//alter_group_/}"
+				name="$(basename ${alter_path%.alt*})"
+				if [[ ! "${priority}" =~ ^[0-9]+$ || \
+					"$(grep -c '^.*$' <<< "${associations[@]} ${linkdir} ${rootdir}")" != "1" ]] || \
+					grep -E "(//|:| )" <<< "${linkdir};${rootdir}" || \
+					! _pa_check_dir_path "${linkdir}" || ! _pa_check_dir_path "${rootdir}" || \
+					grep -Eq "(^|/|:| )(/|:| |$)" <<< "${associations[@]}" || \
+					awk -v RS=' ' -v len="${#associations[@]}" '!a[$1]++ {b+=split($1, cache, ":")}
+					END {
+						if (len == length(a) && len*2 == b)
+							exit 1
+						else
+							exit 0
+					}' <<< "${associations[@]}"; then
+					exit 1
+				fi
+				awk -v RS=" " \
+					-v group="${group}" \
+					-v name="${name}" \
+					-v priority="${priority}" \
+					-v linkdir="${linkdir}" \
+					-v rootdir="${rootdir}" \
+					'{split($1,path,":"); print group ":" name ":" priority ":" linkdir path[1] ":" rootdir path[2]}' \
+					<<< "${associations[@]}"
+			)
+		done
+	}
+
 	local i error=() result=() alter group name points alter_path func
 	local -A alt_funcs
 	while (($# >= 1)); do
@@ -199,7 +253,6 @@ _pa_read_alter_file() {
 		else
 			name="${alter##*:}"
 			group="${alter%%:*}"
-
 			points=$(tr ' ' '\n' <<< "${_pa_file_alt[@]}" | grep "^${group//\*/\.*}:${name//\*/\.*}$")
 			if [ -z "${points}" ]; then
 				error+=("${group:=[unknown]}:${name}:notfound")
@@ -217,7 +270,7 @@ _pa_read_alter_file() {
 		}' <<< ${points})"
 	done
 
-	local i=1 goal=${#alt_funcs[@]} sysdir="${_pa_sysdir}" linkdir="" rootdir="" associations=() priority=0
+	local i=1 goal=${#alt_funcs[@]} sysdir="${_pa_sysdir}" rootdir="${_pa_rootdir}" linkdir="${_pa_linkdir}" associations=() priority=0
 	for alter_path in ${!alt_funcs[@]}; do
 		_pa_progress "${i}" "${goal}" "reading alternative files"
 		i=$((i+1))
@@ -225,43 +278,14 @@ _pa_read_alter_file() {
 			error+=("${alter_path}:notfound_file")
 			continue
 		fi
-		result+=($(
-			source "${alter_path}"
-			for func in ${alt_funcs["${alter_path}"]}; do
-				(
-					${func}
-					: "${linkdir:="${sysdir}"}"
-					: "${rootdir:="${sysdir}"}"
-					group="${func//alter_group_/}"
-					name="$(basename ${alter_path%.alt*})"
-					if [[ " ${result[@]}" =~ " ${group}:${name}:" ]]; then
-						continue
-					fi
-					if [[ ! "${priority}" =~ ^[0-9]+$ || \
-						"$(grep -c '^.*$' <<< "${associations[@]} ${linkdir} ${rootdir}")" != "1" ]] || \
-						grep -E "(//|:| )" <<< "${linkdir};${rootdir}" || \
-						! _pa_check_dir_path "${linkdir}" || ! _pa_check_dir_path "${rootdir}" || \
-						grep -Eq "(^|/|:| )(/|:| |$)" <<< "${associations[@]}" || \
-						awk -v RS=' ' -v len="${#associations[@]}" '!a[$1]++ {b+=split($1, cache, ":")}
-						END {
-							if (len == length(a) && len*2 == b)
-								exit 1
-							else
-								exit 0
-						}' <<< "${associations[@]}"; then
-						exit 1
-					fi
-					awk -v RS=" " \
-						-v group="${group}" \
-						-v name="${name}" \
-						-v priority="${priority}" \
-						-v linkdir="${linkdir}" \
-						-v rootdir="${rootdir}" \
-						'{split($1,path,":"); print group ":" name ":" priority ":" linkdir path[1] ":" rootdir path[2]}' \
-						<<< "${associations[@]}"
-				)
-			done
-		)) || error+=("${alter_path}:syntax_file")
+		result+=($($([[ "${_pa_uid}" = "0" && -n "${_pa_reader_user}" ]] && echo "runuser ${_pa_reader_user} -m" || echo "bash") -c "set -e; \
+			$(declare -p _pa_version alter_path func alt_funcs sysdir rootdir linkdir group name priority associations); \
+			{ \
+				$(cat "${alter_path}"); \
+			} &> /dev/null; \
+			$(declare -f _pa_check_dir_path _pa_run_alter_funcs); \
+			_pa_run_alter_funcs" 2> /dev/null)) || \
+			error+=("${alter_path}:syntax_file")
 	done
 
 	tr ' ' '\n' <<< "${result[@]}"
@@ -318,12 +342,13 @@ _pa_get_point_file_alters() {
 
 _pa_read_file_alters() {
 	_pa_verbose
-	_pa_file_alt=($(set +f; _pa_get_point_file_alters "${_pa_alter_files_path}/"*".alt"))
+	local file_alt=$(find "${_pa_alter_files_path}/" -mindepth 1 -maxdepth 1 -type f -name "*.alt")
+	_pa_file_alt=($([ -n "${file_alt}" ] && _pa_get_point_file_alters ${file_alt} || echo))
 }
 
 _pa_read_enabled_alters() {
 	_pa_verbose
-	_pa_enabled_alt=($(for association in $(find "${_pa_enabled_alters_path}" -mindepth 1 -type f); do
+	_pa_enabled_alt=($(for association in $(find "${_pa_enabled_alters_path}" -mindepth 2 -maxdepth 2 -type f); do
 		association="${association//${_pa_enabled_alters_path}\//}"
 		awk -v association="${association//\//:}" -F "=" '{if ($1 == "association") print association ":" $2}' "${_pa_enabled_alters_path}/${association}"
 	done))
@@ -331,7 +356,7 @@ _pa_read_enabled_alters() {
 
 _pa_read_selected_alters() {
 	_pa_verbose
-	_pa_selected_alt=($(find "${_pa_enabled_alters_path}" -type l -exec readlink -fn {} \; -printf ':%f\n' | sed "s|${_pa_enabled_alters_path}/||g; s|:.*:select:|:|g; s|/|:|g"))
+	_pa_selected_alt=($(find "${_pa_enabled_alters_path}" -mindepth 2 -maxdepth 2 -type l -exec readlink -fn {} \; -printf ':%f\n' | sed "s|${_pa_enabled_alters_path}/||g; s|:.*:select:|:|g; s|/|:|g"))
 }
 
 _pa_get_point_alters() {
@@ -355,7 +380,7 @@ _pa_find_alters() {
 
 	local i=1 goal=$# notfound=() list=$(tr ' ' '\n' <<< "${_pa_enabled_alt[@]}") result=()
 	if [ "${type}" = "disabled" ]; then
-		list=$(tr ' ' '\n' <<< "${_pa_file_alt[@]}" | grep -Ev "^($(_pa_get_point_alters <<< "${list}" | paste -sd '|'))$")
+		list=$(tr ' ' '\n' <<< "${_pa_file_alt[@]}" | grep -Ev "^($(_pa_get_point_alters <<< "${list}" | paste -sd '|'))$" || true)
 	elif [ "${type}" = "selected" ]; then
 		list=$(_pa_get_selected_alters <<< "${list}")
 	fi
@@ -383,7 +408,7 @@ _pa_find_alters() {
 
 _pa_return_enabled_alters() {
 	_pa_verbose
-	tr ' ' '\n' <<< "${_pa_enabled_alt[@]}" | grep -Ev "^($(tr ' ' '|' <<< "${_pa_non_integrity_alt[@]}"))$"
+	tr ' ' '\n' <<< "${_pa_enabled_alt[@]}" | grep -Ev "^($(tr ' ' '|' <<< "${_pa_non_integrity_alt[@]}"))$" || true
 }
 
 _pa_chmod_alters() {
@@ -458,7 +483,7 @@ _pa_check_conflict_link_path() {
 	_pa_verbose
 	local i=0 goal=$((${#}/2+1))
 	local d_associations="$(_pa_merge_data 2 ${@} | sort -u)"
-	local e_associations="$(_pa_return_enabled_alters | awk -F ':' '!a[$1 ":" $4]++ {print $1 ":" $4}' | grep -Ev "^($(awk -F ':' '!a[$1]++ {print $1}' <<< "${d_associations}" | paste -sd '|')):")"
+	local e_associations="$(_pa_return_enabled_alters | awk -F ':' '!a[$1 ":" $4]++ {print $1 ":" $4}' | grep -Ev "^($(awk -F ':' '!a[$1]++ {print $1}' <<< "${d_associations}" | paste -sd '|')):" || true)"
 	while (($# >= ${goal})); do
 		_pa_progress "$((i+1))" "$((goal-1))" "checking link paths for conflicts"
 		if (($(grep -c ":${!goal}$" <<< "${d_associations}") > 1)) || grep -q ":${!goal}$" <<< "${e_associations}"; then
@@ -497,13 +522,31 @@ _pa_check_valid_link_path() {
 	done
 }
 
+_pa_check_permission_uid_link_path() {
+	_pa_verbose
+	local args=($(_pa_merge_data 3 ${@}))
+	local i=0 goal=$((${#args[@]})) link
+	while ((${i} < ${goal})); do
+		_pa_progress "$((i+1))" "${goal}" "checking link paths for permission"
+		link="${args[${i}]##*:}"
+		if [ "${operation:-}" = "query" ] && ! ${_pa_query_disabled}; then
+			if [[ " ${_pa_selected_alt[@]}" =~ " ${args[${i}]%:*}:" && "$(stat -c '%u' "${link}")" != "${_pa_uid_enabled_alters_path}" ]]; then
+				echo $i
+			fi
+		elif [ ! -w "${link%/*}" ]; then
+			echo $i
+		fi
+		i=$((i+1))
+	done
+}
+
 _pa_check_dependent_alter() {
 	_pa_verbose
 	local i=0 goal="$#" list="$(_pa_return_enabled_alters)"
 	if [ "${operation:-}" = "reject" ] && ! ${_pa_reject_disable}; then
 		list="$(_pa_get_selected_alters <<< "${list}")"
 	fi
-	list="$(awk -F ':' '{print $4 ":" $5}' <<< "${list}" | grep -Ev "^($(tr ' ' '|' <<< "${@}")):")"
+	list="$(awk -F ':' '{print $4 ":" $5}' <<< "${list}" | grep -Ev "^($(tr ' ' '|' <<< "${@}")):" || true)"
 	while (($# >= 1)); do
 		_pa_progress "$((i+1))" "${goal}" "checking alternative for dependencies"
 		if grep -q ":${1}$" <<< "${list}"; then
@@ -524,7 +567,6 @@ _pa_check_duplicate_root_path() {
 			echo $i
 		fi
 		i=$((i+1))
-		shift 1
 	done
 }
 
@@ -639,7 +681,7 @@ _pa_check_alt() {
 		list_group=(${list_group[@]})
 		if [ "${#list_group[@]}" = "0" ]; then
 			_pa_warning "all alternative data have integrity problems, skip checking to remove corrupted data"
-			return
+			return 0
 		fi
 		list_name=(${list_name[@]})
 		list_priority=(${list_priority[@]})
@@ -652,39 +694,42 @@ _pa_check_alt() {
 			'${list_root_path[$i]} not found for ${list_link_path[$i]##*/}'
 		_pa_check_alt_eval valid_link_path '${list_link_path[@]}' 'not valid link paths' \
 			'${list_link_path[$i]} not valid'
+		_pa_check_alt_eval permission_uid_link_path '${list_group[@]} ${list_name[@]} ${list_link_path[@]}' \
+			"$([ "${operation}" = "query" ] && ! ${_pa_query_disabled} && echo 'link paths have different origin uid' || echo 'not permitted link paths')" \
+			"$([ "${operation}" = "query" ] && ! ${_pa_query_disabled} && echo 'different uid' || echo '${list_link_path[$i]} permission denied')"
 	fi
 
 	case "${operation}" in
 		"enable"|"query")
 		_pa_check_alt_eval duplicate_root_path '${list_group[@]} ${list_name[@]} ${list_root_path[@]}' 'duplicate root paths' \
 			'${list_root_path[$i]} duplicate'
-		_pa_check_alt_eval conflict_link_path '${list_group[@]} ${list_link_path[@]}' 'alternative conflicts' \
+		_pa_check_alt_eval conflict_link_path '${list_group[@]} ${list_link_path[@]}' 'alternatives conflict' \
 			'${list_link_path[$i]} conflicts'
 		;;
 
 		"select")
 		if ! ${_pa_overwrite}; then
-			_pa_check_alt_eval existence_link_path '${list_link_path[@]}' 'link path conflicts' \
+			_pa_check_alt_eval existence_link_path '${list_link_path[@]}' 'link paths conflict' \
 				'${list_link_path[$i]} exists in filesystem'
 		fi
-		_pa_check_alt_eval conflict_enabled_alter '${list_group[@]} ${list_name[@]}' 'enabled alternative conflicts' 'conflicts'
+		_pa_check_alt_eval conflict_enabled_alter '${list_group[@]} ${list_name[@]}' 'enabled alternatives conflict' 'conflicts'
 		;;
 
 		"disable")
 		if ! ${_pa_disable_reject}; then
-			_pa_check_alt_eval selected_alter '${list_group[@]} ${list_name[@]}' 'impossible disable selected alternative' 'selected'
+			_pa_check_alt_eval selected_alter '${list_group[@]} ${list_name[@]}' 'impossible to disable selected alternatives' 'selected'
 		fi
 		;;
 
 		"uninstall")
-		_pa_check_alt_eval enabled_alter '${list_group[@]} ${list_name[@]}' 'impossible delete alternative file when its enabled' 'enabled'
+		_pa_check_alt_eval enabled_alter '${list_group[@]} ${list_name[@]}' 'impossible to delete alternative files when enabled' 'enabled'
 		;;
 	esac
 
 	if [[ "${operation}" = "disable" || "${operation}" = "reject" ]]; then
-		_pa_check_alt_eval dependent_alter '${list_link_path[@]}' 'alternative presents dependency' 'needed'
+		_pa_check_alt_eval dependent_alter '${list_link_path[@]}' 'alternatives present dependency' 'needed'
 	elif [[ "${operation}" = "install" || "${operation}" = "uninstall" ]]; then
-		_pa_check_alt_eval alter_belong_pkg '${list_group[@]} ${list_name[@]}' "impossible ${operation} alternative file belongs to pkg" 'belongs'
+		_pa_check_alt_eval alter_belong_pkg '${list_group[@]} ${list_name[@]}' "impossible to ${operation} alternative files belong to pkg" 'belongs'
 	elif [ "${operation}" = "query" ]; then
 		echo ${list_index_issue[@]}
 	fi
@@ -748,7 +793,7 @@ _pa_action_association() {
 			"install")
 			_pa_progress "${i}" "${goal}" "installing associations for ${alter}"
 			if [ "${old_association}" != "${association}" ]; then
-				local selected=$(tr ' ' '\n' <<< "${_pa_selected_alt[@]%:*}" | grep "^${group}:")
+				local selected=$(tr ' ' '\n' <<< "${_pa_selected_alt[@]%:*}" | grep "^${group}:" || true)
 				if [ -n "${selected}" ]; then
 					_pa_nomessage=true _pa_action_association "remove" $(_pa_nomessage=true _pa_find_alters enabled ${selected})
 				fi
@@ -803,33 +848,33 @@ _pa_action_association() {
 	fi
 }
 
-_pa_choose_alt_by_priority() {
+_pa_select_alt() {
 	_pa_verbose
-	local group="${1}" alt1 alt2
-	local high="${2##*:}" low="${3#*:}"
-	if (("${high}" > "${low}")); then
-		return 0
-	elif (("${high}" == "${low}")); then
-		alt1="${_pa_enabled_alters_path}/${group}/${2}"
-		alt2="${_pa_enabled_alters_path}/${group}/${3}"
-		if ! [[ -f "${alt1}" && -f "${alt2}" ]]; then
-			alt1="${_pa_alter_files_path}/${2%:*}.alt"
-			alt2="${_pa_alter_files_path}/${3%:*}.alt"
-			if [ ! -f "${alt1}" ]; then
-				return 1
-			elif [ ! -f "${alt2}" ]; then
+
+	_pa_choose_alt_by_priority() {
+		local group="${1}" alt1 alt2
+		local high="${2#*:}" low="${3#*:}"
+		if (("${high}" > "${low}")); then
+			return 0
+		elif (("${high}" == "${low}")); then
+			alt1="${_pa_enabled_alters_path}/${group}/${2}"
+			alt2="${_pa_enabled_alters_path}/${group}/${3}"
+			if ! [[ -f "${alt1}" && -f "${alt2}" ]]; then
+				alt1="${_pa_alter_files_path}/${2%:*}.alt"
+				alt2="${_pa_alter_files_path}/${3%:*}.alt"
+				if [ ! -f "${alt1}" ]; then
+					return 1
+				elif [ ! -f "${alt2}" ]; then
+					return 0
+				fi
+			fi
+			if (($(date -r "${alt1}" "+%s%N") < $(date -r "${alt2}" "+%s%N"))); then
 				return 0
 			fi
 		fi
-		if (($(date -r "${alt1}" "+%s%N") < $(date -r "${alt2}" "+%s%N"))); then
-			return 0
-		fi
-	fi
-	return 1
-}
+		return 1
+	}
 
-_pa_select_alt() {
-	_pa_verbose
 	local list="$(tr ' ' '\n' <<< "${@}" | sort -u)" alt alts alti alti_s mode=$(${_pa_automode} && echo "auto" || echo "manual") ghost_alt=()
 	for alt in $(awk -F ':' '!a[$1]++ {print $1}' <<< "${list}"); do
 		alts=($(grep "^${alt}:" <<< "${list}" | awk -F ':' '!a[$2 ":" $3]++ {print $2 ":" $3}'))
@@ -874,7 +919,7 @@ _pa_select_alt() {
 			fi
 			if [ -z "${alti_s}" ]; then
 				for alti in ${!alts[@]}; do
-					_pa_progress "$((alti+1))" "${#alts[@]}" "Auto-selecting alternatives ${alt}:* by priority"
+					_pa_progress "$((alti+1))" "${#alts[@]}" "auto-selecting alternatives ${alt}:* by priority"
 					if [ -z "${alti_s}" ] || _pa_choose_alt_by_priority "${alt}" "${alts[${alti}]}" "${alts[${alti_s}]}"; then
 						alti_s="${alti}"
 					fi
@@ -887,9 +932,7 @@ _pa_select_alt() {
 			_pa_init_error "all listed alternatives of group ${alt} are ghosts: ${ghost_alt[@]}"
 		fi
 	done
-	if ${_pa_haserror}; then
-		exit 1
-	fi
+	_pa_exit_error
 
 	for alt in $(_pa_get_selected_alters -o <<< "${list}" | sort -u); do
 		alt="${alt::-1}"
@@ -936,7 +979,7 @@ _pa_question_to_continue() {
 
 _pa_notify_about_alt_and_get_confirm() {
 	_pa_verbose
-	${PA_RUN_IN_ALPM_HOOKS} && return
+	${PA_RUN_IN_ALPM_HOOKS} && return 0
 
 	_pa_info "The following alternatives will be ${1}:"
 	awk -F ':' -v bold="${_pa_bold}" -v nostyle="${_pa_nostyle}" '{
@@ -970,7 +1013,7 @@ _pa_enable() {
 	data_alt=$(_pa_read_alter_file ${@})
 
 	_pa_commit "Checking alternatives status for enabling"
-	local alt alt_select=() alt_reselect=()
+	local alt alt_select=()
 	if ${_pa_enable_select}; then
 		alt_select+=(${data_alt})
 	fi
@@ -992,7 +1035,7 @@ _pa_enable() {
 				fi
 			elif ! ${_pa_enable_select} && [[ " ${_pa_selected_alt[@]%:*} " =~ " ${alt} " ]]; then
 				_pa_warning "alternative ${alt} requires reselecting"
-				alt_reselect+=($(grep "^${alt}:" <<< "${data_alt}"))
+				alt_select+=($(grep "^${alt}:" <<< "${data_alt}"))
 			fi
 		fi
 	done
@@ -1013,12 +1056,8 @@ _pa_enable() {
 			alt_select=()
 		fi
 	fi
-	alt_select+=(${alt_reselect[@]})
-	if ${_pa_needed} && [[ -z "${data_alt}" && -z "${alt_select}" ]]; then
+	if [[ -z "${data_alt}" && -z "${alt_select}" ]]; then
 		_pa_nothing_to_do
-	fi
-	if [[ -n "${data_alt}" && -n "${alt_select}" ]]; then
-		data_alt="$(tr ' ' '\n' <<< "${alt_select[@]}"; grep -Ev "^($(tr ' ' '|' <<< "${alt_select[@]}"))$" <<< "${data_alt}" || true)"
 	fi
 
 	if [ -n "${data_alt}" ]; then
@@ -1066,33 +1105,33 @@ _pa_disable() {
 	_pa_commit "Checking alternatives for disabling"
 	_pa_check_alt "disable" ${data_alt}
 
-	local reject_alt
+	local alt_reject
 	if ${_pa_disable_reject}; then
-		reject_alt=$(_pa_noerror=true _pa_nomessage=true _pa_find_alters selected ${alts[@]} || true)
-		if ! (${_pa_disable_ghost} || ${_pa_automode}) && [ -z "${reject_alt}" ]; then
+		alt_reject=$(_pa_noerror=true _pa_nomessage=true _pa_find_alters selected ${alts[@]} || true)
+		if ! (${_pa_disable_ghost} || ${_pa_automode}) && [ -z "${alt_reject}" ]; then
 			_pa_warning "no alternatives found that need rejecting"
 		fi
 	fi
-	local select_alt
+	local alt_select
 	if ${_pa_automode}; then
 		_pa_commit "Checking alternatives status for selecting"
 		for alt in ${!alts[@]}; do
 			if [ "$(_pa_get_mode_by_selected_alt ${alts[${alt}]%:*})" != "auto" ]; then
-				_pa_warning "alternative group ${alts[${alt}]%:*} is on manual mode, reselecting canceled"
+				_pa_warning "alternative group of ${alts[${alt}]} is on manual mode, replacing canceled"
 				unset alts[${alt}]
 			fi
 		done
-		select_alt=$(_pa_needed=true _pa_select_alt $(_pa_alt_analog_by_group ${alts[@]}))
-		if [ -n "${select_alt}" ]; then
+		alt_select=$(_pa_needed=true _pa_select_alt $(_pa_alt_analog_by_group ${alts[@]}))
+		if [ -n "${alt_select}" ]; then
 			_pa_commit "Checking alternatives for selecting"
-			_pa_check_alt "select" ${select_alt}
+			_pa_check_alt "select" ${alt_select}
 		fi
 	fi
 
 	_pa_notify_about_alt_and_get_confirm "disabled" "${data_alt}" \
 		"The following alternatives will be rejected" \
-		"$([ -n "${reject_alt}" ] && awk -F ':' '{ if (alt != $1 ":" $2) {alt = $1 ":" $2; print "  " alt}}' <<< "${reject_alt}" || true)" \
-		"The following alternatives will be selected" \
+		"$([ -n "${alt_reject}" ] && awk -F ':' '{ if (alt != $1 ":" $2) {alt = $1 ":" $2; print "  " alt}}' <<< "${alt_reject}" || true)" \
+		"The following alternatives will be replaced" \
 		"$(awk -F ':' -v alts="$(tr ' ' ',' <<< ${alts[@]})" '{ if ($1 != "" && $2 != "") !a[$1 ":" $2]++ } END {
 			split(alts, alts_array, ",")
 			for (i in a) {
@@ -1101,19 +1140,19 @@ _pa_disable() {
 					if (alts_array[j] ~ i_array[1] ":")
 						print "  " alts_array[j] " -> " i
 			}
-		}' <<< "${select_alt}")"
+		}' <<< "${alt_select}")"
 
-	if [ -n "${reject_alt}" ]; then
+	if [ -n "${alt_reject}" ]; then
 		_pa_commit "Removing associations"
-		_pa_action_association "remove" ${reject_alt}
+		_pa_action_association "remove" ${alt_reject}
 	fi
 
 	_pa_commit "Disabling associations"
 	_pa_action_association "disable" ${data_alt}
 
-	if [ -n "${select_alt}" ]; then
+	if [ -n "${alt_select}" ]; then
 		_pa_commit "Installing associations"
-		_pa_action_association "install" ${select_alt}
+		_pa_action_association "install" ${alt_select}
 	fi
 }
 
@@ -1165,7 +1204,7 @@ _pa_select() {
 			alt_select=($(_pa_select_alt ${data_alt}))
 		fi
 	fi
-	if (${_pa_select_update} && [[ -z "${data_alt}" && -z "${alt_del}" ]]) || (${_pa_needed} && [ -z "${alt_select}" ]); then
+	if (${_pa_select_update} && [[ -z "${data_alt}" && -z "${alt_del}" ]]) || (! ${_pa_select_update} && [ -z "${alt_select}" ]); then
 		_pa_nothing_to_do
 	fi
 
@@ -1190,9 +1229,9 @@ _pa_select() {
 			auto_select=($(_pa_noerror=true _pa_nomessage=true _pa_find_alters enabled ${auto_select[@]} | grep -Ev "^($(tr ' ' '|' <<< ${alts[@]})):" || true))
 			if [ -n "${auto_select}" ]; then
 				alts=($(grep -E "^($(tr ' ' '\n' <<< ${auto_select[@]%%:*} | sort -u | paste -sd '|')):" <<< "${data_alt}" || true))
-				alt_select=($(tr ' ' '\n' <<< ${alt_select[@]} | grep -Ev "^($(tr ' ' '\n' <<< ${alts[@]} | _pa_get_point_alters | paste -sd '|')):"))
+				alt_select=($(tr ' ' '\n' <<< ${alt_select[@]} | grep -Ev "^($(tr ' ' '\n' <<< ${alts[@]} | _pa_get_point_alters | paste -sd '|')):" || true))
 				auto_select+=(${alts[@]})
-				alt_select+=($(_pa_selfmode=false _pa_automode=true _pa_needed=true _pa_nowarning=true _pa_select_alt ${auto_select[@]}))
+				alt_select+=($(_pa_selfmode=false _pa_automode=true _pa_nowarning=true _pa_select_alt ${auto_select[@]}))
 			fi
 		fi
 	fi
@@ -1237,9 +1276,13 @@ _pa_reject() {
 		_pa_commit "Searching for replacements for alternatives"
 		alts=$(_pa_get_point_alters <<< "${data_alt}")
 		alt_select=$(_pa_select_alt $(_pa_alt_analog_by_group ${alts}))
-		for alt in $(grep -Ev "^$(awk -F ':' '!a[$1]++ {print $1}' <<< "${alt_select}" | paste -sd '|'):" <<< "${alts}"); do
+		for alt in $(grep -Ev "^$(awk -F ':' '!a[$1]++ {print $1}' <<< "${alt_select}" | paste -sd '|'):" <<< "${alts}" || true); do
 			_pa_warning "could not find replacement to ${alt} alternative"
 		done
+		if [ -n "${alt_select}" ]; then
+			_pa_commit "Checking alternatives for selecting"
+			_pa_check_alt "select" ${alt_select}
+		fi
 	fi
 
 	_pa_notify_about_alt_and_get_confirm "rejected$(${_pa_reject_disable} && echo " and disabled" || true)" "${data_alt}" \
@@ -1293,7 +1336,7 @@ _pa_query() {
 			_pa_warning "there is nothing to check because there are no ${type} alternatives"
 			_pa_nothing_to_do
 		fi
-		return
+		return 0
 	fi
 
 	if ${_pa_query_disabled} && (${_pa_query_check} || ${_pa_query_info} || ${_pa_query_list}); then
@@ -1318,7 +1361,7 @@ _pa_query() {
 				fi
 			done
 			if [[ -z "${alts[@]}" ]]; then
-				return
+				return 0
 			fi
 		fi
 		grep -E "/($(tr ' ' '|' <<< "${alts[@]}")).alt$" <<< "${data_file}"
@@ -1349,8 +1392,8 @@ _pa_query() {
 			} else {
 				printf "                "
 			}
-			gsub(sysdir, "", $4)
-			gsub(sysdir, "", $5)
+			sub(sysdir, "", $4)
+			sub(sysdir, "", $5)
 			print (($4 == "") ? "[unknown]" : $4) " -> " (($5 == "") ? "[unknown]" : $5)
 		}
 		END {
@@ -1487,9 +1530,7 @@ _pa_uninstall() {
 			file_alt+=("${altf}")
 		fi
 	done
-	if ${_pa_haserror}; then
-		exit 1
-	fi
+	_pa_exit_error
 
 	local data_alt
 	_pa_commit "Reading alternative files"
@@ -1512,12 +1553,12 @@ _pa_help_main() {
 operations:
     pacman-alternatives {-h --help}
     pacman-alternatives {-V --version}
-    pacman-alternatives {-E --enable}     [options] [disabled alternative(s)]
     pacman-alternatives {-D --disable}    [options] [enabled alternative(s)]
-    pacman-alternatives {-S --select}     [options] [enabled alternative(s)]
-    pacman-alternatives {-R --reject}     [options] [selected alternative(s)]
-    pacman-alternatives {-Q --query}      [options] [enabled alternative(s)]
+    pacman-alternatives {-E --enable}     [options] [disabled alternative(s)]
     pacman-alternatives {-I --install}    [options] [alternative file(s)]
+    pacman-alternatives {-Q --query}      [options] [enabled alternative(s)]
+    pacman-alternatives {-R --reject}     [options] [selected alternative(s)]
+    pacman-alternatives {-S --select}     [options] [enabled alternative(s)]
     pacman-alternatives {-U --uninstall}  [options] [alternative file(s)]
 
 use 'pacman-alternatives <operation> {-h --help}' with an operation for available options\n"
@@ -1526,8 +1567,8 @@ use 'pacman-alternatives <operation> {-h --help}' with an operation for availabl
 _pa_help_enable() {
 	_pa_message "usage:  pacman-alternatives {-E --enable} [options] [disabled alternative(s)]
 options:
-  -a, --auto           after enabling, select alternative automatically
-                       (auto turns on -s, works only with auto mode)
+  -a, --auto           after enabling, select alternative in auto mode
+                       (auto includes -s, only if a manual selection has not been made)
   -s, --select         after enabling, select alternative
       --needed         do not enable already enabled alternatives
       --noconfirm      do not ask for any confirmation
@@ -1538,11 +1579,12 @@ options:
 _pa_help_disable() {
 	_pa_message "usage:  pacman-alternatives {-D --disable} [options] [enabled alternative(s)]
 options:
-  -a, --auto           after disabling, automatically select alternative to replace
-                       (auto turns on -r, works only with auto mode)
+  -a, --auto           after disabling, select alternative to replace in auto mode
+                       (auto includes -r, only if a manual selection has not been made)
   -g, --ghost          disable only ghosts
   -r, --reject         reject alternatives before disabling
-      --noconfirm      do not ask for any confirmation\n"
+      --noconfirm      do not ask for any confirmation
+      --overwrite      overwrite files that conflict with links\n"
 }
 
 _pa_help_select() {
@@ -1560,25 +1602,26 @@ options:
 _pa_help_reject() {
 	_pa_message "usage:  pacman-alternatives {-U --reject} [options] [selected alternative(s)]
 options:
-  -a, --auto           after rejecting, automatically select alternative to replace
-                       (auto turns on -d and -r)
+  -a, --auto           after rejecting, select alternative to replace in auto mode
+                       (auto includes -d and -r)
   -d, --disable        disable alternatives after reject
   -r, --replace        select alternative to replace
       --noconfirm      do not ask for any confirmation
-      --noghost        do not use ghosts for selecting\n"
+      --noghost        do not use ghosts for selecting
+      --overwrite      overwrite files that conflict with links\n"
 }
 
 _pa_help_query() {
 	_pa_message "usage:  pacman-alternatives {-Q --query} [options] [ebabled alternative(s)]
 options:
-  -a, --alternatives   list of alternatives (default works with enabled)
-  -c, --check          check alternatives (default works with enabled)
+  -a, --alternatives   list of alternatives (default shows only enabled)
+  -c, --check          check alternatives (default shows only enabled)
   -d, --disabled       work with disabled alternatives
-  -f, --alterfiles     list of alternative files (default works with enabled)
-  -g, --groups         list of alternative groups (default works with enabled)
-  -i, --info           view alternative information (default works with enabled)
-  -l, --list           list of alternative links (-ll for more information)
-  -n, --names          list of alternative names (default works with enabled)
+  -f, --alterfiles     list of alternative files (default shows only enabled)
+  -g, --groups         list of alternative groups (default shows only enabled)
+  -i, --info           view alternative information (default shows only enabled)
+  -l, --list           list of alternative links (-ll to show metadata)
+  -n, --names          list of alternative names (default shows only enabled)
   -s, --selected       work with selected alternatives
       --nowarning      do not return warnings\n"
 }
@@ -1597,12 +1640,14 @@ options:
 }
 
 _pa_version_info() {
-	_pa_message "pacman-alternatives ${_pa_version}
+	_pa_message "pacman-alternatives v${_pa_version}
 
 A utility for managing symbolic links (alternatives) of pacman packages.
+Copyright (c) 2026 Termux-Pacman <pacman@termux.dev>
+Copyright (c) 2026 Max Ivan (@Maxython) <mixython@gmail.com>
 License: GPLv3
 
-For bug reporting instructions, please see:
+For bug reporting, please see:
 <https://github.com/termux-pacman/pacman-alternatives/issues>\n"
 }
 
@@ -1660,7 +1705,7 @@ _pa_run_operation() {
 		}
 		print_array("_pa_args", args)
 		print_array("arg_alters", alts)
-	}' <<< "${@}")"
+	}' <<< "-h:1:helpmode --help:1:helpmode ${@}")"
 
 	_pa_verbose_var operation \
 		_pa_{needed,noconfirm,noghost,overwrite} \
@@ -1678,7 +1723,7 @@ _pa_run_operation() {
 
 	if ${_pa_helpmode}; then
 		_pa_help_${operation}
-		return
+		return 0
 	fi
 
 	for i in ${!_pa_conflicting_args[@]}; do
@@ -1751,19 +1796,44 @@ _pa_run_operation() {
 		fi
 		_pa_init_error "alternative not found: ${alter}"
 	done
-	if ${_pa_haserror}; then
-		exit 1
-	fi
+	_pa_exit_error
 
 	if ! ${_pa_norequire_alt} && ((${#alters} == 0)); then
 		_pa_error "no targets specified"
 	fi
 
+	if [ "${operation}" != "query" ]; then
+		if [ "${_pa_uid}" != "${_pa_uid_enabled_alters_path}" ]; then
+			if [ "${_pa_uid}" = "0" ] && ( \
+				([ "${operation}" = "disable" ] && ! ${_pa_automode}) || \
+				([ "${operation}" = "reject" ] && ! ${_pa_reject_replace}) || \
+				[ "${operation}" = "uninstall" ]); then
+				_pa_warning "operation runs as root on files owned by user $(id -un ${_pa_uid_enabled_alters_path})(${_pa_uid_enabled_alters_path})"
+				_pa_question_to_continue
+			else
+				_pa_error "operation must be run as user $(id -un ${_pa_uid_enabled_alters_path})(${_pa_uid_enabled_alters_path})"
+			fi
+		fi
+		if [ ! -w "${_pa_alter_files_path}" ]; then
+			_pa_init_error "permission denied to alternative files"
+		fi
+		if [ ! -w "${_pa_enabled_alters_path}" ]; then
+			_pa_init_error "permission denied to alternatives"
+		fi
+		if [[ "${_pa_uid}" = "0" && -n "${_pa_reader_user}" ]] && ! id -u "${_pa_reader_user}" &> /dev/null; then
+			_pa_init_error "reader user '${_pa_reader_user}' not found"
+		fi
+		_pa_exit_error
+	fi
+
 	_pa_read_selected_alters
 	_pa_static_selected_alt=(${_pa_selected_alt[@]})
 
-	trap '_pa_chmod_alters -w' EXIT
-	_pa_chmod_alters +w
+	if [ "${operation}" != "query" ]; then
+		trap '_pa_chmod_alters -w' EXIT
+		_pa_chmod_alters +w
+	fi
+
 	_pa_${operation} "${alters[@]}"
 }
 
@@ -1810,8 +1880,17 @@ if ${PA_RUN_IN_ALPM_HOOKS}; then
 	_pa_title_progress="  ${_pa_blue}->${_pa_bold} "
 fi
 
+if [[ "${_pa_alter_files_path}" = "${_pa_enabled_alters_path}" ]]; then
+	_pa_error "path to alternative files and path to alternatives cannot be the same"
+fi
 if ! _pa_check_dir_path "${_pa_sysdir}"; then
 	_pa_init_error "sysdir path value is invalid: ${_pa_sysdir}"
+fi
+if [ -n "${_pa_rootdir}" ] && ! _pa_check_dir_path "${_pa_rootdir}"; then
+	_pa_init_error "rootdir path value is invalid: ${_pa_rootdir}"
+fi
+if [ -n "${_pa_linkdir}" ] && ! _pa_check_dir_path "${_pa_linkdir}"; then
+        _pa_init_error "linkdir path value is invalid: ${_pa_linkdir}"
 fi
 if [ ! -d "${_pa_alter_files_path}" ]; then
 	_pa_init_error "path to alternative files not found: ${_pa_alter_files_path}"
@@ -1819,13 +1898,18 @@ fi
 if [ ! -d "${_pa_enabled_alters_path}" ]; then
 	_pa_init_error "path to alternatives not found: ${_pa_enabled_alters_path}"
 fi
-if ${_pa_haserror}; then
-	exit 1
+_pa_exit_error
+if [ "$(stat -c '%u %g' "${_pa_alter_files_path}")" != "$(stat -c '%u %g' "${_pa_enabled_alters_path}")" ]; then
+	_pa_error "path to alternative files and path to alternatives have different origins"
 fi
 
-_pa_verbose_var PA_{RUN_IN_ALPM_HOOKS,VERBOSE,SYSDIR,PREFIX,ALTER_FILES_PATH,ENABLED_ALTERS_PATH} \
-	PA_DEF_{SYSDIR,PREFIX,ALTER_FILES_PATH,ENABLED_ALTERS_PATH} \
-	_pa_{sysdir,prefix,alter_files_path,enabled_alters_path} \
+_pa_uid="$(id -u)"
+_pa_uid_enabled_alters_path="$(stat -c '%u' "${_pa_enabled_alters_path}")"
+
+_pa_verbose_var PA_{RUN_IN_ALPM_HOOKS,VERBOSE,SYSDIR,ROOTDIR,LINKDIR,PREFIX,ALTER_FILES_PATH,ENABLED_ALTERS_PATH,READER_USER} \
+	PA_DEF_{SYSDIR,ROOTDIR,LINKDIR,PREFIX,ALTER_FILES_PATH,ENABLED_ALTERS_PATH,READER_USER} \
+	_pa_{sysdir,rootdir,linkdir,prefix,alter_files_path,enabled_alters_path,reader_user} \
+	_pa_uid{,_enabled_alters_path} \
 	_pa_{version,pacman_dbpath,style}
 
 _pa_args=($(awk -v RS=' ' '{
@@ -1854,7 +1938,6 @@ case "${_pa_root_arg}" in
 	_pa_run_operation enable \
 		-{s,-select}:1:enable_select \
 		-{a,-auto}:1:automode,enable_select \
-		-{h,-help}:1:helpmode \
 		--needed:1:needed \
 		--noconfirm:1:noconfirm \
 		--noghost:1:noghost \
@@ -1866,15 +1949,14 @@ case "${_pa_root_arg}" in
 		-{a,-auto}:1:automode,disable_reject \
 		-{g,-ghost}:1:disable_ghost,disable_reject,norequire_alt \
 		-{r,-reject}:1:disable_reject \
-		-{h,-help}:1:helpmode \
-		--noconfirm:1:noconfirm
+		--noconfirm:1:noconfirm \
+		--overwrite:1:overwrite
 	;;
 	-S|--select)
 	_pa_conflicting_args=("automode:auto select_update:update")
 	_pa_run_operation select \
 		-{a,-auto}:1:automode,only_group \
 		-{u,-update}:1:select_update,norequire_alt,selfmode \
-		-{h,-help}:1:helpmode \
 		--needed:1:needed \
 		--noconfirm:1:noconfirm \
 		--noghost:1:noghost \
@@ -1885,9 +1967,9 @@ case "${_pa_root_arg}" in
 		-{r,-replace}:1:reject_replace \
 		-{d,-disable}:1:reject_disable \
 		-{a,-auto}:1:automode,reject_replace,reject_disable \
-		-{h,-help}:1:helpmode \
 		--noconfirm:1:noconfirm \
-		--noghost:1:noghost
+		--noghost:1:noghost \
+		--overwrite:1:overwrite
 	;;
 	-Q|--query)
 	_pa_norequire_alt=true
@@ -1896,7 +1978,6 @@ case "${_pa_root_arg}" in
 		"query_alters:alternatives query_check:check query_names:names query_groups:groups query_info:info query_list:list query_alter_files:alterfiles"
 	)
 	_pa_run_operation query \
-		-{h,-help}:1:helpmode \
 		-{a,-alternatives}:1:query_alters \
 		-{c,-check}:1:query_check \
 		-{n,-names}:1:query_names \
@@ -1912,14 +1993,12 @@ case "${_pa_root_arg}" in
 	-I|--install)
 	_pa_arg_is_altfile=true
 	_pa_run_operation install \
-		-{h,-help}:1:helpmode \
 		--needed:1:needed \
 		--noconfirm:1:noconfirm
 	;;
 	-U|--uninstall)
 	_pa_only_name=true
 	_pa_run_operation uninstall \
-		-{h,-help}:1:helpmode \
 		--noconfirm:1:noconfirm
 	;;
 	-V|--version)

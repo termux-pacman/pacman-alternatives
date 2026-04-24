@@ -20,8 +20,8 @@ if [ -z "${alts}" ]; then
 	exit 0
 fi
 
-case "${1}" in
-	"enable") pacman-alternatives -Ea ${alts[@]} --overwrite;;
-	"update") pacman-alternatives -Su ${alts[@]} --overwrite;;
-	"disable") pacman-alternatives -Da ${alts[@]};;
-esac
+pacman-alternatives $(case "${1}" in
+	"enable")  echo "-Ea";;
+	"update")  echo "-Su";;
+	"disable") echo "-Da";;
+	esac) ${alts[@]} --overwrite

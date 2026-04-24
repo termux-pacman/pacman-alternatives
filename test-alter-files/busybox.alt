@@ -1,22 +1,22 @@
+priority=10
+linkdir+="usr/bin/"
+rootdir+="usr/libexec/busybox/"
+
 alter_group_vi() {
-	associations=(usr/bin/vi:usr/libexec/busybox/vi)
-	priority=10
+	associations=(vi:vi)
 }
 
 alter_group_editor() {
-	associations=(usr/bin/editor:usr/libexec/busybox/vi)
-	priority=10
+	associations=(editor:vi)
 }
 
 alter_group_pager() {
-	associations=(usr/bin/pager:usr/libexec/busybox/less)
-	priority=10
+	associations=(pager:less)
 }
 
 alter_group_nc() {
-	associations=(usr/bin/nc:usr/libexec/busybox/nc
-		usr/bin/ncat:usr/libexec/busybox/nc
-		usr/bin/netcat:usr/libexec/busybox/nc
+	associations=(nc:nc
+		ncat:nc
+		netcat:nc
 	)
-	priority=10
 }

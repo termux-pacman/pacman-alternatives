@@ -1,2 +1,2 @@
 # pacman-alternatives
-In development, wait for release.
+A utility for managing symbolic links (alternatives) of pacman packages.

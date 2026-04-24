@@ -1,7 +1,7 @@
-# example switcher
-sysdir+="usr/"
+# example alternative 2
 
 alter_group_test2() {
-	associations=(bin/123:bin/test)
+	sysdir+="usr/bin/"
 	priority=100
+	associations=(123:test)
 }
