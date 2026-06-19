@@ -16,19 +16,19 @@ Variables for installation configuration:
 Variable | Type | Description | Default
 ---|---|---|---
 `DEF_OS` | `android`/`linux` | host operating system | automatically detects host OS
-`PREFIX` | fullpath | main path for installing and routing system files | on Linux - `/usr`, on Android (Termux) - `/data/data/com.termux/files/usr`
+`PREFIX` | path | main path for installing and routing system files | on Linux - `/usr`, on Android (Termux) - `/data/data/com.termux/files/usr`
 `DESTDIR` | empty/path | path to installing temporary directory | empty
-`SYSDIR` | fullpath | main path for routing alternative (links and root files) paths | on Linux - `/`, on Android (Termux) - `/data/data/com.termux/files/usr/`
-`LINKDIR` | empty/fullpath | path for routing links of alternatives | empty
-`ROOTDIR` | empty/fullpath | path for routing root files of alternatives | empty
-`ALTER_FILES_PATH` | path/fullpath | path to directory for alternative files | `share/pacman-alternatives`
-`ENABLED_ALTERS_PATH` | path/fullpath | path to directory for active alternatives | `var/lib/pacman/alternatives`
+`SYSDIR` | path | main path for routing alternative (links and root files) paths | on Linux - `/`, on Android (Termux) - `/data/data/com.termux/files/usr/`
+`LINKDIR` | empty/path | path for routing links of alternatives | empty
+`ROOTDIR` | empty/path | path for routing root files of alternatives | empty
+`ALTER_FILES_PATH` | path/path | path to directory for alternative files | `share/pacman-alternatives`
+`ENABLED_ALTERS_PATH` | path/path | path to directory for active alternatives | `var/lib/pacman/alternatives`
 `READER_USER` | username/empty | user for reading alternative files | on Linux - `pacman-alternatives`, on Android (Termux) - empty (disabling use of reader user)
-`BINDIR` | fullpath | path to `bin/` | `$(PREFIX)/bin`
-`BASHPATH` | fullpath | path to bash | `$(BINDIR)/bash`
-`ALPMDIR` | fullpath | path to ALPM directory | `$(PREFIX)/share/libalpm`
-`ALPM_HOOK_DIR` | fullpath | path to hooks directory of ALPM | `$(ALPMDIR)/hooks`
-`ALPM_SCRIPT_DIR` | fullpath | path to scripts directory of ALPM | `$(ALPMDIR)/scripts`
+`BINDIR` | path | path to `bin/` | `$(PREFIX)/bin`
+`BASHPATH` | path | path to bash | `$(BINDIR)/bash`
+`ALPMDIR` | path | path to ALPM directory | `$(PREFIX)/share/libalpm`
+`ALPM_HOOK_DIR` | path | path to hooks directory of ALPM | `$(ALPMDIR)/hooks`
+`ALPM_SCRIPT_DIR` | path | path to scripts directory of ALPM | `$(ALPMDIR)/scripts`
 
 ## Operations
 Name | Flag | Description
@@ -87,20 +87,20 @@ Variable | Type | Description
 --- | --- | ---
 `PA_RUN_IN_ALPM_HOOKS` | bool | configure output and processing for the ALPM environment
 `PA_VERBOSE` | bool | enable verbose mode
-`PA_SYSDIR` | fullpath | set path for routing alternative (links and root files) paths (must begin and end with `/`)
-`PA_ROOTDIR` | empty/fullpath | set path for routing root files of alternatives (must begin and end with `/`)
-`PA_LINKDIR` | empty/fullpath | set path for routing links of alternatives (must begin and end with `/`)
-`PA_PREFIX` | fullpath | set path for routing system files
-`PA_ALTER_FILES_PATH` | path/fullpath | set path to directory for alternative files (if relative path is specified, full path is formed using `_pa_prefix`: `"${_pa_prefix}/${PA_ALTER_FILES_PATH}"`)
-`PA_ENABLED_ALTERS_PATH` | path/fullpath | set path to directory for active alternatives (if relative path is specified, full path is formed using `_pa_prefix`: `"${_pa_prefix}/${PA_ENABLED_ALTERS_PATH}"`)
+`PA_SYSDIR` | path | set path for routing alternative (links and root files) paths (must begin and end with `/`)
+`PA_ROOTDIR` | empty/path | set path for routing root files of alternatives (must begin and end with `/`)
+`PA_LINKDIR` | empty/path | set path for routing links of alternatives (must begin and end with `/`)
+`PA_PREFIX` | path | set path for routing system files
+`PA_ALTER_FILES_PATH` | path | set path to directory for alternative files (if relative path is specified, absolute path is formed using `_pa_prefix`: `"${_pa_prefix}/${PA_ALTER_FILES_PATH}"`)
+`PA_ENABLED_ALTERS_PATH` | path | set path to directory for active alternatives (if relative path is specified, absolute path is formed using `_pa_prefix`: `"${_pa_prefix}/${PA_ENABLED_ALTERS_PATH}"`)
 `PA_READER_USER` | username/empty | set reader username (if empty, the use of reader user is disabled)
 
 ## Syntax file alternative
-File alternative is a shell script in the `.alt` format, which stores `alter_group_*` functions that allow to flexibly configure alternatives and easily collect alternative metadata from them (`group:name:priority:link:root`).  
+File alternative is a shell script in the `.alt` format, which stores `alter_group_*` functions that allow flexibly configuring alternatives and easily collecting alternative metadata from them (`group:name:priority:link:root`).  
 
 Syntax rules:
-- Alternative name and alternative group name can consist of alphabets, numbers and the special characters `-`/`_`.
-- Path in the `sysdir`, `linkdir` and `rootdir` variables must begin and end with the `/` character.
+- Alternative name and alternative group name can consist of letters, numbers and the special characters `-`/`_`.
+- Paths in the `sysdir`, `linkdir` and `rootdir` variables must begin and end with the `/` character.
 - Value of `priority` variable must be integer.
 - Paths specified in the `associations` variable must be relative.
 
