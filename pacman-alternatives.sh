@@ -106,7 +106,7 @@ _pa_progress() {
 	fi
 	local title="${_pa_title_progress}"
 	if ! ${PA_RUN_IN_ALPM_HOOKS}; then
-		title+="(${now}/${goal}) "
+		title+="($(printf '%*s' "$((${#goal}-${#now}))")${now}/${goal}) "
 	fi
 	_pa_message "${title}${3}${_pa_nostyle}$((! ${PA_RUN_IN_ALPM_HOOKS} && ! ${_pa_progress_noret} && ! ${PA_VERBOSE} && ((now < goal))) && echo '\r' || echo '\n')"
 }
