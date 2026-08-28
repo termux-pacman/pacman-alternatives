@@ -38,9 +38,10 @@ if [ "${_pa_enabled_alters_path::1}" != "/" ]; then
 fi
 _pa_uid=""
 _pa_uid_enabled_alters_path=""
+_pa_amount_error="0"
 
 # pacman-alternatives system info
-readonly _pa_version="1.0.0"
+readonly _pa_version="1.0.1"
 
 # database
 _pa_file_alt=()
@@ -66,7 +67,7 @@ _pa_noerror=false
 _pa_only_group=false
 _pa_only_name=false
 _pa_norequire_alt=false
-_pa_haserror=false
+_pa_exit_error=false
 _pa_arg_is_altfile=false
 _pa_progress_noret=false
 
@@ -131,13 +132,18 @@ _pa_error_message() {
 	_pa_nomessage=false _pa_message "${_pa_red}${_pa_title_error}${_pa_nostyle} $1\n"
 }
 
-_pa_init_error() {
+_pa_error_counting() {
 	_pa_error_message "$1"
-	_pa_haserror=true
+	_pa_amount_error=$((${_pa_amount_error}+1))
 }
 
-_pa_exit_error() {
-	${_pa_haserror} && exit 1 || true
+_pa_error_init() {
+	_pa_error_counting "$1"
+	_pa_exit_error=true
+}
+
+_pa_error_exit() {
+	${_pa_exit_error} && exit 1 || true
 }
 
 _pa_error() {
@@ -618,12 +624,14 @@ _pa_check_alt() {
 	_pa_verbose
 
 	_pa_check_alt_eval() {
+		local error_fun="_pa_error_message"
 		if [ "${operation}" = "query" ]; then
 			local _pa_noprogress=true
+			error_fun="_pa_error_counting"
 		fi
 		eval "local result_check_${1}=\$(_pa_nomessage=${_pa_noprogress} _pa_check_${1} ${2})
 		if [ -n \"\${result_check_${1}}\" ]; then
-			_pa_error_message \"${3}\"
+			${error_fun} \"${3}\"
 			for i in \${result_check_${1}}; do
 				_pa_message \"\${list_group[\$i]}:\${list_name[\$i]}: ${4}\n\"
 				if [[ ! \" \${list_index_issue[@]} \" =~ \" \${i} \" ]]; then
@@ -823,11 +831,11 @@ _pa_action_association() {
 			if [[ ! " ${_pa_non_integrity_alt[@]} " =~ " ${1} " ]]; then
 				if [[ "${old_association}" != "${association}" && "${mode}" = "auto" && \
 					"$(_pa_return_enabled_alters | awk -F ':' -v group="${group}" '{if ( group == $1 && int($3) == $3 && i < $3) i = $3} END {print i}')" != "${priority}" ]]; then
-					_pa_error_message "selected alternative ${alter} does not have maximum priority"
+					_pa_error_counting "selected alternative ${alter} does not have maximum priority"
 					echo "${alter}"
 				fi
 				if ! [[ -L "${link_path}" && "$(readlink ${link_path})" = "${root_path}" ]]; then
-					_pa_error_message "problem with link: ${link_path}"
+					_pa_error_counting "problem with link: ${link_path}"
 					echo "${alter}"
 				fi
 			fi
@@ -929,10 +937,10 @@ _pa_select_alt() {
 				list=$(sed "/^${alt}:${alts[${alti}]}/d" <<< "${list}")
 			done
 		elif ${_pa_noghost} && (("${#alts[@]}" == 0)); then
-			_pa_init_error "all listed alternatives of group ${alt} are ghosts: ${ghost_alt[@]}"
+			_pa_error_init "all listed alternatives of group ${alt} are ghosts: ${ghost_alt[@]}"
 		fi
 	done
-	_pa_exit_error
+	_pa_error_exit
 
 	for alt in $(_pa_get_selected_alters -o <<< "${list}" | sort -u); do
 		alt="${alt::-1}"
@@ -1314,7 +1322,7 @@ _pa_reject() {
 _pa_query() {
 	_pa_verbose
 
-	_pa_query_print_result() {
+	_pa_query_check_print_result() {
 		eval "if [ -n \"\${${1}}\" ]; then
 			echo \"  ${2}:\"
 			for alt in \${${1}[@]}; do
@@ -1402,10 +1410,10 @@ _pa_query() {
 	elif ${_pa_query_check}; then
 		_pa_commit "Checking alternative data integrity"
 		data_alt=(${data_alt})
-		for alt in $(_pa_nomessage=true _pa_check_alter_data_integrity ${_pa_enabled_alt[@]}); do
-			_pa_error_message "alternative data has an integrity problem: ${_pa_enabled_alt[${alt}]}"
-			_pa_non_integrity_alt+=("${_pa_enabled_alt[${alt}]}")
-			data_alt=($(sed "s| ${_pa_enabled_alt[${alt}]} | |" <<< " ${data_alt[@]} "))
+		for alt in $(_pa_nomessage=true _pa_check_alter_data_integrity ${data_alt[@]}); do
+			_pa_error_counting "alternative data has an integrity problem: ${data_alt[${alt}]}"
+			_pa_non_integrity_alt+=("${data_alt[${alt}]}")
+			data_alt=($(sed "s| ${data_alt[${alt}]} | |" <<< " ${data_alt[@]} "))
 		done
 		if [[ "${#data_alt[@]}" = "0" ]]; then
 			_pa_error "all alternative data have integrity problems"
@@ -1419,7 +1427,7 @@ _pa_query() {
 				if [ -f "${_pa_alter_files_path}/${alt#*:}.alt" ]; then
 					data_file=$(_pa_nomessage=true _pa_noerror=true _pa_read_alter_file "${alt}")
 					if [ -z "${data_file}" ]; then
-						_pa_error_message "failed to read alternative file ${alt} correctly: alternative file is corrupted"
+						_pa_error_counting "failed to read alternative file ${alt} correctly: alternative file is corrupted"
 						issue_data+=("${alt}")
 					else
 						fail_checksum=false
@@ -1433,12 +1441,12 @@ _pa_query() {
 							fail_diff=true
 						fi
 						if ! ${fail_checksum} && ${fail_diff}; then
-							_pa_error_message "alternative data ${alt} has changes that are not committed by checksum"
+							_pa_error_counting "alternative data ${alt} has changes that are not committed by checksum"
 							issue_data+=("${alt}")
 						fi
 					fi
 				else
-					_pa_error_message "alternative ${alt} is ghost: alternative file not found"
+					_pa_error_counting "alternative ${alt} is ghost: alternative file not found"
 					issue_data+=("${alt}")
 				fi
 			done
@@ -1456,10 +1464,10 @@ _pa_query() {
 		if [[ -z "${_pa_non_integrity_alt}" && -z "${issue_data}" && -z "${issue_env}" && -z "${issue_select}" ]]; then
 			_pa_nothing_to_do
 		fi
-		_pa_query_print_result "_pa_non_integrity_alt" "found alternative data that have integrity problems, such data skips checking" '${alt}'
-		! ${_pa_query_disabled} && _pa_query_print_result "issue_data" "found problems with verification of alternative data" '${alt}'
-		_pa_query_print_result "issue_env" "found alternatives that have environmental problems" '${data_alt[${alt}]}'
-		! ${_pa_query_disabled} && _pa_query_print_result "issue_select" "found alternatives that have problems with selected associations" '${alt}' || true
+		_pa_query_check_print_result "_pa_non_integrity_alt" "found alternative data that have integrity problems, such data skips checking" '${alt}'
+		! ${_pa_query_disabled} && _pa_query_check_print_result "issue_data" "found problems with verification of alternative data" '${alt}'
+		_pa_query_check_print_result "issue_env" "found alternatives that have environmental problems" '${data_alt[${alt}]}'
+		! ${_pa_query_disabled} && _pa_query_check_print_result "issue_select" "found alternatives that have problems with selected associations" '${alt}' || true
 	else
 		alts=($(awk -F ':' '!a[$1 ":" $2]++ {print $1 ":" $2 ":" $3}' <<< "${data_alt}"))
 		for alt in $(tr ' ' '\n' <<< ${alts[@]%%:*} | sort -u); do
@@ -1525,12 +1533,12 @@ _pa_uninstall() {
 	for alt in ${@#*:}; do
 		altf="${_pa_alter_files_path}/${alt}.alt"
 		if [ ! -f "${altf}" ]; then
-			_pa_init_error "alternative file ${alt}.alt not found"
+			_pa_error_init "alternative file ${alt}.alt not found"
 		else
 			file_alt+=("${altf}")
 		fi
 	done
-	_pa_exit_error
+	_pa_error_exit
 
 	local data_alt
 	_pa_commit "Reading alternative files"
@@ -1622,8 +1630,7 @@ options:
   -i, --info           view alternative information (default shows only enabled)
   -l, --list           list of alternative links (-ll to show metadata)
   -n, --names          list of alternative names (default shows only enabled)
-  -s, --selected       work with selected alternatives
-      --nowarning      do not return warnings\n"
+  -s, --selected       work with selected alternatives\n"
 }
 
 _pa_help_install() {
@@ -1765,7 +1772,7 @@ _pa_run_operation() {
 			alter="$(realpath ${alter})"
 			if [ -f "${alter}" ]; then
 				if [ "${alter##*.}" != "alt" ]; then
-					_pa_init_error "specified file is not alternative file"
+					_pa_error_init "specified file is not alternative file"
 				else
 					_pa_run_operation_add_alter "${alter}"
 				fi
@@ -1794,9 +1801,12 @@ _pa_run_operation() {
 			fi
 			set -f
 		fi
-		_pa_init_error "alternative not found: ${alter}"
+		_pa_error_init "alternative not found: ${alter}"
 	done
-	_pa_exit_error
+	if [[ "${operation}" = "query" && "${#alters}" != "0" ]] && ${_pa_exit_error}; then
+		_pa_exit_error=false
+	fi
+	_pa_error_exit
 
 	if ! ${_pa_norequire_alt} && ((${#alters} == 0)); then
 		_pa_error "no targets specified"
@@ -1815,15 +1825,15 @@ _pa_run_operation() {
 			fi
 		fi
 		if [ ! -w "${_pa_alter_files_path}" ]; then
-			_pa_init_error "permission denied to alternative files"
+			_pa_error_init "permission denied to alternative files"
 		fi
 		if [ ! -w "${_pa_enabled_alters_path}" ]; then
-			_pa_init_error "permission denied to alternatives"
+			_pa_error_init "permission denied to alternatives"
 		fi
 		if [[ "${_pa_uid}" = "0" && -n "${_pa_reader_user}" ]] && ! id -u "${_pa_reader_user}" &> /dev/null; then
-			_pa_init_error "reader user '${_pa_reader_user}' not found"
+			_pa_error_init "reader user '${_pa_reader_user}' not found"
 		fi
-		_pa_exit_error
+		_pa_error_exit
 	fi
 
 	_pa_read_selected_alters
@@ -1864,7 +1874,7 @@ if [ -z "${_pa_style}" ]; then
 else
 	_pa_style=true
 fi
-if ${_pa_style}; then
+if ${_pa_style} && ([[ -t 1 && -t 2 ]] || ${PA_RUN_IN_ALPM_HOOKS}); then
 	_pa_bold="\033[0;1m"
 	_pa_nostyle="\033[0m"
 	_pa_blue="\033[1;34m"
@@ -1884,21 +1894,21 @@ if [[ "${_pa_alter_files_path}" = "${_pa_enabled_alters_path}" ]]; then
 	_pa_error "path to alternative files and path to alternatives cannot be the same"
 fi
 if ! _pa_check_dir_path "${_pa_sysdir}"; then
-	_pa_init_error "sysdir path value is invalid: ${_pa_sysdir}"
+	_pa_error_init "sysdir path value is invalid: ${_pa_sysdir}"
 fi
 if [ -n "${_pa_rootdir}" ] && ! _pa_check_dir_path "${_pa_rootdir}"; then
-	_pa_init_error "rootdir path value is invalid: ${_pa_rootdir}"
+	_pa_error_init "rootdir path value is invalid: ${_pa_rootdir}"
 fi
 if [ -n "${_pa_linkdir}" ] && ! _pa_check_dir_path "${_pa_linkdir}"; then
-        _pa_init_error "linkdir path value is invalid: ${_pa_linkdir}"
+        _pa_error_init "linkdir path value is invalid: ${_pa_linkdir}"
 fi
 if [ ! -d "${_pa_alter_files_path}" ]; then
-	_pa_init_error "path to alternative files not found: ${_pa_alter_files_path}"
+	_pa_error_init "path to alternative files not found: ${_pa_alter_files_path}"
 fi
 if [ ! -d "${_pa_enabled_alters_path}" ]; then
-	_pa_init_error "path to alternatives not found: ${_pa_enabled_alters_path}"
+	_pa_error_init "path to alternatives not found: ${_pa_enabled_alters_path}"
 fi
-_pa_exit_error
+_pa_error_exit
 if [ "$(stat -c '%u %g' "${_pa_alter_files_path}")" != "$(stat -c '%u %g' "${_pa_enabled_alters_path}")" ]; then
 	_pa_error "path to alternative files and path to alternatives have different origins"
 fi
@@ -1987,8 +1997,7 @@ case "${_pa_root_arg}" in
 		-{l,-list}:1:query_list \
 		-{d,-disabled}:1:query_disabled \
 		-{s,-selected}:1:query_selected \
-		-{f,-alterfiles}:1:query_alter_files \
-		--nowarning:1:nowarning
+		-{f,-alterfiles}:1:query_alter_files
 	;;
 	-I|--install)
 	_pa_arg_is_altfile=true
@@ -2012,4 +2021,8 @@ case "${_pa_root_arg}" in
 	;;
 esac
 
-exit 0
+if [ "${_pa_amount_error}" = "0" ]; then
+	exit 0
+else
+	exit 1
+fi
