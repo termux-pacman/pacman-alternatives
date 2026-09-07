@@ -21,6 +21,12 @@ build-alpm-hooks:
 
 build-all: build build-alpm-hooks
 
+rebuild: clean-$(OUTPUT) build
+
+rebuild-alpm-hooks: clean-alpm-hooks build-alpm-hooks
+
+rebuild-all: clean build-all
+
 install-alpm-hooks:
 	$(MAKE) -C alpm-hooks DESTDIR="$(FULL_DESTDIR)"
 
@@ -41,6 +47,10 @@ ifneq ($(READER_USER),)
 endif
 install: $(INSTALL_TARGETS)
 
-clean:
+clean-$(OUTPUT):
 	rm -fr $(OUTPUT)
+
+clean-alpm-hooks:
 	$(MAKE) -C alpm-hooks clean
+
+clean: clean-$(OUTPUT) clean-alpm-hooks

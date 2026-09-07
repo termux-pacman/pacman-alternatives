@@ -1923,7 +1923,7 @@ _pa_verbose_var PA_{RUN_IN_ALPM_HOOKS,VERBOSE,SYSDIR,ROOTDIR,LINKDIR,PREFIX,ALTE
 	_pa_{version,pacman_dbpath,style}
 
 _pa_args=($(awk -v RS=' ' '{
-	gsub(/\x1B\[[0-9;]*[A-Za-z]/, "", $1)
+	gsub(/\\|\x1B\[[0-9;]*[A-Za-z]/, "", $1)
 	if (substr($1, 1, 1) == "-") {
 		count = gsub("-", "", $1)
 		if (count == 1)
