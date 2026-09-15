@@ -152,7 +152,7 @@ _pa_error() {
 }
 
 _pa_nothing_to_do() {
-	_pa_message "${_pa_title_progress:=" "}there is nothing to do\n"
+	_pa_message "${_pa_title_progress:=" "}there is nothing to do${_pa_nostyle}\n"
 	exit 0
 }
 
@@ -1696,8 +1696,10 @@ _pa_run_operation() {
 	}
 	function print_array(name, array) {
 		printf name "=("
-		for (i in array)
-			printf array[i] " "
+		for (i in array) {
+			gsub(/\\040/, " ", array[i])
+			printf "\047" array[i] "\047 "
+		}
 		print ")"
 	}
 	END {
@@ -1764,7 +1766,7 @@ _pa_run_operation() {
 	_pa_read_enabled_alters
 
 	local alters=() alter group name
-	for alter in ${arg_alters[@]}; do
+	for alter in "${arg_alters[@]}"; do
 		if ${_pa_arg_is_altfile}; then
 			if [[ "${alter::1}" != "/" && "${alter::1}" != "." ]]; then
 				alter="./${alter}"
@@ -1922,17 +1924,19 @@ _pa_verbose_var PA_{RUN_IN_ALPM_HOOKS,VERBOSE,SYSDIR,ROOTDIR,LINKDIR,PREFIX,ALTE
 	_pa_uid{,_enabled_alters_path} \
 	_pa_{version,pacman_dbpath,style}
 
-_pa_args=($(awk -v RS=' ' '{
-	gsub(/\\|\x1B\[[0-9;]*[A-Za-z]/, "", $1)
-	if (substr($1, 1, 1) == "-") {
-		count = gsub("-", "", $1)
+_pa_args=($(printf "%s\n" "$@" | awk '{
+	gsub(/\x1B\[[0-9;]*[A-Za-z]/, "", $0)
+	gsub(/ /, "\\040", $0)
+	gsub(/\\/, "\\\\", $0)
+	if (substr($0, 1, 1) == "-") {
+		count = gsub("-", "", $0)
 		if (count == 1)
-			gsub(/./, " -&", $1)
+			gsub(/./, " -&", $0)
 		else if (count >= 2)
 			printf "--"
 	}
-	print $1
-}' <<< "${@}"))
+	print $0
+}'))
 _pa_conflicting_args=()
 
 _pa_root_arg="${_pa_args[0]}"
